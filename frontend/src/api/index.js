@@ -37,10 +37,13 @@ export const estimatePrice = (data) => {
  * 获取区域房价统计数据接口
  * 获取各行政区域的平均单价和房源数量，用于前端图表展示。
  * 
+ * @param {string} region - 区域名称或拼音 (可选，默认后端处理)
  * @returns {Promise} Axios Promise 对象，resolve 后包含区域统计列表
  */
-export const getRegionStats = () => {
-    return api.get('/stats/region/')
+export const getRegionStats = (region) => {
+    return api.get('/stats/region/', {
+        params: { region }
+    })
 }
 
 /**

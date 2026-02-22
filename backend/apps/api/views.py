@@ -141,6 +141,12 @@ class RegionStatsView(APIView):
         # 获取当前查询的区域（如果未传，默认为 'beijing'）
         region = request.query_params.get('region', 'beijing')
         
+        # 处理中文区域名转拼音
+        import re
+        if re.search(r'[\u4e00-\u9fa5]', region):
+            from pypinyin import lazy_pinyin
+            region = ''.join(lazy_pinyin(region))
+        
         # 获取该区域当前的真实均价
         current_avg = House.objects.filter(region__icontains=region).aggregate(Avg('unit_price'))
         base_price = current_avg.get('unit_price__avg')

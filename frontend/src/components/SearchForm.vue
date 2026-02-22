@@ -329,7 +329,9 @@ const decorations = DECORATIONS
 
 // 暴露方法供父组件通过 ref 调用
 defineExpose({
-  setFormValues
+  setFormValues,
+  showCrawlDialog,
+  crawlForm
 })
 </script>
 
@@ -421,13 +423,30 @@ defineExpose({
   margin-bottom: 24px;
 }
 
+/* 统一输入框和下拉框的高度与样式 */
 .custom-form :deep(.el-input__wrapper),
 .custom-form :deep(.el-select__wrapper) {
   border-radius: 12px;
   box-shadow: 0 0 0 1px #e2e8f0 inset !important;
-  padding: 8px 16px;
+  padding: 0 16px; /* 统一内边距 */
   transition: all 0.3s ease;
   background-color: #f8fafc;
+  height: 48px; /* 强制统一高度 */
+  line-height: 48px;
+  box-sizing: border-box;
+}
+
+/* 针对 InputNumber 的特殊处理，使其内部 input 居中 */
+.custom-form :deep(.el-input-number .el-input__inner) {
+  height: 48px;
+  line-height: 48px;
+  text-align: left; /* 保持左对齐，与 Select 文字一致 */
+}
+
+/* 移除 InputNumber 默认的边框，完全依赖 wrapper 的样式 */
+.custom-form :deep(.el-input-number__decrease),
+.custom-form :deep(.el-input-number__increase) {
+  display: none; /* 隐藏加减按钮，保持简洁 */
 }
 
 .custom-form :deep(.el-input__wrapper:hover),

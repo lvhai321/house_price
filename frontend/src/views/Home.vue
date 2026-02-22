@@ -139,7 +139,12 @@
               <!-- 选项卡 2: 区域房价趋势图表 -->
               <el-tab-pane label="区域趋势" name="chart">
                 <div class="chart-container">
-                  <PriceChart :chart-data="chartData" />
+                  <PriceChart 
+                    ref="priceChartRef"
+                    :chart-data="chartData" 
+                    :loading="loading"
+                    :region="currentRegion"
+                  />
                 </div>
               </el-tab-pane>
               
@@ -184,46 +189,11 @@
         </el-timeline-item>
       </el-timeline>
     </el-drawer>
-
-    <!-- 爬虫配置对话框 -->
-    <el-dialog v-model="showCrawlDialog" title="高级爬虫配置" width="500px">
-      <el-form :model="crawlForm" label-width="100px">
-        <el-form-item label="目标城市">
-          <el-select v-model="crawlForm.city_subdomain" placeholder="请选择城市">
-            <el-option label="北京 (bj)" value="bj" />
-            <el-option label="上海 (sh)" value="sh" />
-            <el-option label="武汉 (wh)" value="wh" />
-            <el-option label="广州 (gz)" value="gz" />
-            <el-option label="深圳 (sz)" value="sz" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="行政区域">
-          <el-input v-model="crawlForm.region" placeholder="请输入区域拼音 (如 chaoyang)" />
-        </el-form-item>
-        <el-form-item label="并发线程">
-          <el-input-number v-model="crawlForm.workers" :min="1" :max="10" />
-        </el-form-item>
-        <el-form-item label="存储方式">
-          <el-radio-group v-model="crawlForm.storage">
-            <el-radio label="db">数据库</el-radio>
-            <el-radio label="csv">CSV文件</el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="showCrawlDialog = false">取消</el-button>
-          <el-button type="primary" @click="handleCrawlConfirm" :loading="crawling">
-            启动爬虫
-          </el-button>
-        </span>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useValuationStore } from '../stores/valuation'
 import { ElMessage } from 'element-plus'
@@ -231,28 +201,31 @@ import { ArrowRight } from '@element-plus/icons-vue'
 import PriceChart from '../components/PriceChart.vue'
 import SearchForm from '../components/SearchForm.vue'
 import ValuationResult from '../components/ValuationResult.vue'
-import { startCrawl } from '../api'
+// api import removed as it's no longer used directly in Home
+
 
 // --- Store 集成 ---
 // 使用 Pinia store 管理全局状态
 const store = useValuationStore()
 // 使用 storeToRefs 保持响应性解构
-const { loading, result, chartData, history: searchHistory, factors } = storeToRefs(store)
+const { loading, result, chartData, history: searchHistory, factors, currentRegion } = storeToRefs(store)
 const { search, fetchStats, loadHistory, reset } = store
 
 // --- UI 状态 ---
 const searchFormRef = ref(null) // 表单组件引用
+const priceChartRef = ref(null) // 图表组件引用
 const showHistory = ref(false)  // 控制历史记录抽屉显示
 const activeTab = ref('search_results') // 当前激活的选项卡
 
-// 爬虫相关状态
-const showCrawlDialog = ref(false)
-const crawling = ref(false)
-const crawlForm = reactive({
-  city_subdomain: 'bj',
-  region: 'chaoyang',
-  workers: 2,
-  storage: 'db'
+// 监听 activeTab 变化，当切换到 chart 时手动触发 resize
+watch(activeTab, (newVal) => {
+  if (newVal === 'chart') {
+    nextTick(() => {
+      if (priceChartRef.value) {
+        priceChartRef.value.resize()
+      }
+    })
+  }
 })
 
 // --- 事件处理方法 ---
@@ -261,35 +234,15 @@ const crawlForm = reactive({
  * 触发爬虫更新 (方案C)
  */
 const triggerCrawl = () => {
-  // 预填充当前搜索的区域
-  if (searchHistory.value.length > 0) {
-     crawlForm.region = searchHistory.value[0].region || 'chaoyang'
-  }
-  showCrawlDialog.value = true
-}
-
-const handleCrawlConfirm = async () => {
-  if (!crawlForm.region) {
-    ElMessage.warning('请输入行政区域')
-    return
-  }
-  
-  crawling.value = true
-  try {
-    const res = await startCrawl(crawlForm)
-    if (res.data && res.data.status === 'success') {
-       ElMessage.success(res.data.message)
-       showCrawlDialog.value = false
-    } else {
-       ElMessage.warning('爬虫启动可能遇到问题: ' + (res.data ? res.data.message : '未知错误'))
+  // 调用 SearchForm 组件暴露的方法来显示爬虫对话框
+  if (searchFormRef.value) {
+    searchFormRef.value.showCrawlDialog = true
+    // 如果有历史记录，可以尝试预填充区域（可选，SearchForm 内部可能已有逻辑）
+    if (searchHistory.value.length > 0) {
+      searchFormRef.value.crawlForm.region = searchHistory.value[0].region || 'chaoyang'
     }
-  } catch (e) {
-    ElMessage.error('启动失败: ' + e.message)
-  } finally {
-    crawling.value = false
   }
 }
-
 
 /**
  * 处理重置事件
@@ -340,8 +293,8 @@ const openLink = (url) => {
 
 // --- 生命周期钩子 ---
 onMounted(() => {
-  // 组件挂载时获取图表统计数据和加载本地历史记录
-  fetchStats()
+  // 组件挂载时仅加载历史记录，不再默认加载北京数据
+  // fetchStats() 
   loadHistory()
 })
 </script>

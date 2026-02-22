@@ -13,7 +13,8 @@ export const useValuationStore = defineStore('valuation', {
     result: null,       // 估价结果数据，包含预估价格、相似房源等
     chartData: [],      // 区域房价统计数据，用于图表展示
     history: [],        // 本地估价历史记录
-    factors: []         // 影响价格的关键因素列表（如：近地铁、学区房等）
+    factors: [],        // 影响价格的关键因素列表（如：近地铁、学区房等）
+    currentRegion: ''   // 当前选中的区域 (拼音/代码)
   }),
 
   // 定义操作 (Actions)
@@ -45,6 +46,7 @@ export const useValuationStore = defineStore('valuation', {
         this.saveHistory(params, this.result.estimated_price)
         
         // 更新图表数据 (传入当前区域)
+        this.currentRegion = params.region // 确保更新当前区域
         this.fetchStats(params.region)
         
         return true
@@ -61,8 +63,9 @@ export const useValuationStore = defineStore('valuation', {
      * 用于初始化或更新房价趋势图表。
      */
     async fetchStats(region) {
+      if (region) this.currentRegion = region
       try {
-        const response = await getRegionStats(region)
+        const response = await getRegionStats(region || this.currentRegion)
         this.chartData = response.data
       } catch (error) {
         console.error("Failed to fetch stats:", error)
