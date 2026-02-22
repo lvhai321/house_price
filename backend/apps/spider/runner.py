@@ -17,7 +17,7 @@ def run_all(region, pages=3, max_daily=1000, city_subdomain=None):
             city_subdomain = "bj"
     spiders = [
         # LianjiaSpider(region=region, pages=pages, city_subdomain=city_subdomain),
-        FangSpider(region=region, pages=pages, city_subdomain=city_subdomain),
+        FangSpider(region=region, pages=pages, city_subdomain=city_subdomain, use_proxy=False),
         # AnjukeSpider(region=region, pages=pages, city_subdomain=city_subdomain)
     ]
     results = []

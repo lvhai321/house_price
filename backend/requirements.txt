@@ -9,3 +9,4 @@ numpy
 scikit-learn
 pymysql
 python-dotenv
+pypinyin

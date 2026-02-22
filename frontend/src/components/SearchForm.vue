@@ -160,13 +160,13 @@
         <el-input v-model="crawlForm.region" placeholder="请输入区域名称" />
       </el-form-item>
       <el-form-item label="爬取页数">
-        <el-input-number v-model="crawlForm.pages" :min="1" :max="10" />
+        <el-input-number v-model="crawlForm.pages" :min="1" :max="50" />
       </el-form-item>
     </el-form>
     <template #footer>
       <span class="dialog-footer">
         <el-button @click="showCrawlDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleCrawl">开始更新</el-button>
+        <el-button type="primary" @click="handleCrawl" :loading="crawling">开始更新</el-button>
       </span>
     </template>
   </el-dialog>
@@ -191,11 +191,12 @@ const formRef = ref(null)
 
 // --- 爬虫相关状态 ---
 const showCrawlDialog = ref(false)
+const crawling = ref(false) // 爬虫请求加载状态
 const crawlForm = reactive({
   // 将城市子域名默认值设为空，让后端自动判断
   city_subdomain: '',
   region: '',
-  pages: 1
+  pages: 3
 })
 
 const handleCrawl = async () => {
@@ -204,17 +205,25 @@ const handleCrawl = async () => {
     return
   }
   
+  crawling.value = true
   try {
     const res = await startCrawl(crawlForm)
     if (res.data.status === 'success') {
-       ElMessage.success(`更新成功，新增 ${res.data.count} 条数据`)
-       emit('search', queryForm) // 刷新主列表
+       const msg = res.data.message || '数据更新完成'
+       ElMessage.success(msg)
+       
+       // 更新成功后，将爬取的区域回填到主搜索表单，并自动触发搜索，以便用户立即看到结果
+       if (crawlForm.region) {
+         queryForm.region = crawlForm.region
+         emit('search', { ...queryForm })
+       }
     } else {
        ElMessage.warning(res.data.message || '更新未完成')
     }
   } catch (error) {
     ElMessage.error('更新失败: ' + (error.response?.data?.message || error.message))
   } finally {
+    crawling.value = false
     showCrawlDialog.value = false
   }
 }

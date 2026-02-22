@@ -10,6 +10,7 @@ export const useValuationStore = defineStore('valuation', {
   // 定义状态
   state: () => ({
     loading: false,     // 加载状态，用于控制加载动画
+    error: null,        // 错误信息
     result: null,       // 估价结果数据，包含预估价格、相似房源等
     chartData: [],      // 区域房价统计数据，用于图表展示
     history: [],        // 本地估价历史记录
@@ -28,6 +29,7 @@ export const useValuationStore = defineStore('valuation', {
      */
     async search(params) {
       this.loading = true
+      this.error = null
       try {
         // 构造请求载荷，转换部分字段格式以匹配后端接口
         const payload = {
@@ -52,6 +54,7 @@ export const useValuationStore = defineStore('valuation', {
         return true
       } catch (error) {
         console.error('Search failed:', error)
+        this.error = error.message || '估价服务暂时不可用'
         throw error
       } finally {
         this.loading = false

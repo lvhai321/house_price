@@ -31,6 +31,35 @@ class FangSpider(BaseSpider):
         # 房天下反爬策略较严，配置速率限制器
         self.limiter = RateLimiter(jitter_range=(2.0, 3.5))
 
+    def _get_subdomain(self):
+        """
+        获取城市子域名。
+        规则：
+        1. 直辖市（北京、上海、天津、重庆）使用首字母缩写 (bj, sh, tj, cq)。
+        2. 其他城市使用全拼 (如 wuhan, guangzhou)。
+        """
+        city = self.city_subdomain.lower()
+        
+        # 直辖市缩写白名单
+        direct_cities = {'bj', 'sh', 'tj', 'cq'}
+        if city in direct_cities:
+            return city
+            
+        # 常见缩写转全拼映射
+        abbr_map = {
+            'wh': 'wuhan',
+            'gz': 'guangzhou',
+            'sz': 'shenzhen',
+            'hz': 'hangzhou',
+            'cd': 'chengdu',
+            'nj': 'nanjing',
+            'su': 'suzhou',
+            'xa': 'xian',
+            'cs': 'changsha',
+            'cq': 'chongqing', # 重庆通常用 cq，但也防全拼
+        }
+        return abbr_map.get(city, city)
+
     def _list_urls(self):
         """
         生成待爬取的列表页 URL 列表。
@@ -38,32 +67,27 @@ class FangSpider(BaseSpider):
         返回:
             list: URL 字符串列表。
         """
-        # 使用城市子域名构建基础 URL
-        city = self.city_subdomain
+        subdomain = self._get_subdomain()
+        base = f"https://{subdomain}.esf.fang.com"
         
-        # 构建基础 URL
-        # 通常格式为 https://{city}.esf.fang.com/
-        if city == 'bj':
-            base = "https://esf.fang.com"
-        else:
-            base = f"https://{city}.esf.fang.com"
-
-        # 构造分页 URL
-        # 如果指定了 region，使用搜索接口以支持区域筛选
-        # 否则默认使用 /house/i3{page}/
-        if self.region:
-            # 搜索接口: https://esf.fang.com/?kw=朝阳&rfss=1-8070ad6d2673295842-1c
-            # 分页通常是 /?kw=...&page=2
-            # 但房天下的搜索结果页分页比较特殊，有时是 /house-a0{code}/i3{page}/
-            # 为了简单起见，我们尝试直接在 URL 路径中包含关键词
-            # https://esf.fang.com/house/kw%E6%9C%9D%E9%98%B3/
-            # 分页: /house/i3{page}-kw{region}/
+        urls = []
+        for i in range(1, self.pages + 1):
+            # 统一使用 /house/ 路径，兼容性更好
+            # 首页: https://sh.esf.fang.com/house/
+            # 分页: https://sh.esf.fang.com/house/i3{page}/
             
-            # 尝试使用搜索关键词路径
-            return [f"{base}/house/i3{i}-kw{self.region}/" for i in range(1, self.pages + 1)]
-        else:
-            # 模式: /house/i3{page}/
-            return [f"{base}/house/i3{i}/" for i in range(1, self.pages + 1)]
+            # 如果是第一页，尝试不带页码或带 i31
+            # 房天下规则：/house/i3{page}/
+            # 搜索规则：/house/i3{page}-kw{keyword}/
+            
+            path = f"/house/i3{i}"
+            if self.region:
+                path += f"-kw{self.region}"
+            path += "/"
+            
+            urls.append(f"{base}{path}")
+            
+        return urls
 
     def _parse_list(self, html):
         """
@@ -134,6 +158,24 @@ class FangSpider(BaseSpider):
                 
                 if not url:
                     continue
+                
+                # --- 解析区域 (修复 Unknown 问题) ---
+                region_extracted = self.region
+                if not region_extracted:
+                    # 尝试从地址段提取区域，如 [朝阳 大望路]
+                    add_shop_el = dl.select_one("p.add_shop")
+                    if add_shop_el:
+                        add_text = add_shop_el.get_text(strip=True)
+                        match = re.search(r'\[(.*?)\s+.*?\]', add_text)
+                        if match:
+                            # 提取中文区域名，后续处理逻辑中建议转为拼音以保持一致
+                            region_extracted = match.group(1)
+                            # 简单的拼音转换 (如果已安装 pypinyin)
+                            try:
+                                from pypinyin import lazy_pinyin
+                                region_extracted = "".join(lazy_pinyin(region_extracted))
+                            except ImportError:
+                                pass # 如果没装库，就存中文，但在 API 层可能需要适配
 
                 # --- URL 清理与补全 ---
                 # 如果是相对路径，需要补全域名
@@ -145,7 +187,7 @@ class FangSpider(BaseSpider):
                 # 构造房源数据字典
                 item = {
                     "title": title,
-                    "region": self.region or "Unknown",
+                    "region": region_extracted or "Unknown",
                     "area": area_m2,
                     "layout": layout or "",
                     "total_price": total_price_wan,
@@ -169,15 +211,98 @@ class FangSpider(BaseSpider):
             list: 所有爬取到的房源数据列表。
         """
         results = []
-        for url in self._list_urls():
+        # 尝试动态导入 House 模型以进行去重检查
+        try:
+            from apps.spider.models import House
+            db_check_available = True
+        except ImportError:
+            db_check_available = False
+
+        # 智能翻页逻辑：
+        # 目标是收集到足够数量的新数据
+        # 假设每页约 60 条数据，目标总数 = pages * 60
+        
+        target_count = self.pages * 60
+        collected_count = 0
+        
+        current_page = 1
+        consecutive_empty_pages = 0 # 连续空页计数（防死循环）
+        
+        subdomain = self._get_subdomain()
+        base = f"https://{subdomain}.esf.fang.com"
+
+        print(f"[Fang] 开始爬取，目标: {self.pages} 页 (约 {target_count} 条新数据)")
+
+        while collected_count < target_count:
+            # 构造当前页 URL
+            path = f"/house/i3{current_page}"
+            if self.region:
+                path += f"-kw{self.region}"
+            path += "/"
+            url = f"{base}{path}"
+            
+            print(f"[Fang] 正在抓取第 {current_page} 页: {url}")
+            
             try:
                 # 获取页面内容，使用速率限制
                 html = fetch(url, session=self.session, rate_limiter=self.limiter, use_proxy=self.use_proxy)
                 # 解析页面
                 items = self._parse_list(html)
-                results.extend(items)
-                # 随机休眠，模拟人类行为
+                
+                if not items:
+                    print(f"[Fang] 第 {current_page} 页无数据。")
+                    consecutive_empty_pages += 1
+                    if consecutive_empty_pages >= 3:
+                        print("[Fang] 连续 3 页无数据，停止翻页。")
+                        break
+                    current_page += 1
+                    continue
+                else:
+                    consecutive_empty_pages = 0
+
+                # 数据库去重逻辑
+                valid_items = []
+                if db_check_available:
+                    try:
+                        current_urls = [item['url'] for item in items if item.get('url')]
+                        if current_urls:
+                            existing_urls = set(House.objects.filter(url__in=current_urls).values_list('url', flat=True))
+                            
+                            for item in items:
+                                if item.get('url') not in existing_urls:
+                                    valid_items.append(item)
+                    except Exception as db_e:
+                        print(f"[Fang] 数据库去重检查失败: {db_e}")
+                        valid_items = items # 降级：保留所有
+                else:
+                    valid_items = items
+
+                # 智能翻页判断
+                if len(items) > 0 and len(valid_items) == 0:
+                    print(f"[Fang] 第 {current_page} 页全是旧数据 ({len(items)}条)，跳过并尝试下一页...")
+                    current_page += 1
+                    # 限制最大跳跃页数，防止无限向后翻
+                    if current_page > 100: 
+                        print("[Fang] 已达到最大翻页限制 (100页)，停止。")
+                        break
+                    time.sleep(random.uniform(0.5, 1.5)) # 快速跳过时的短休眠
+                    continue
+                
+                print(f"[Fang] 第 {current_page} 页包含 {len(valid_items)}/{len(items)} 条新数据。")
+                
+                if valid_items:
+                    results.extend(valid_items)
+                    collected_count += len(valid_items)
+                    print(f"[Fang] 当前进度: {collected_count}/{target_count}")
+
+                current_page += 1
+                
+                # 随机休眠
                 time.sleep(random.uniform(1.0, 3.0))
+
             except Exception as e:
                 print(f"[Fang] 获取 {url} 失败: {e}")
+                # 出错也算尝试过，避免死循环
+                current_page += 1
+                
         return results

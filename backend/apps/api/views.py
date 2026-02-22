@@ -13,6 +13,10 @@ import threading
 from django.conf import settings
 import os
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 class CrawlView(APIView):
     """
     触发爬虫任务接口。
@@ -26,9 +30,9 @@ class CrawlView(APIView):
         use_proxy = request.data.get('use_proxy', None)
         
         try:
-            pages = int(request.data.get('pages', 1))
+            pages = int(request.data.get('pages', 3))
         except (ValueError, TypeError):
-            pages = 1
+            pages = 3
             
         # 汉字转拼音逻辑
         if region:
@@ -54,34 +58,93 @@ class CrawlView(APIView):
         if region and region.lower() in synonyms:
             region = None
 
+        # 计算真实的目标子域名 (处理缩写 -> 全拼)
+        # 直辖市保留缩写，其他城市转全拼
+        target_subdomain = city_subdomain
+        direct_cities = {'bj', 'sh', 'tj', 'cq'}
+        abbr_to_full = {
+            'wh': 'wuhan',
+            'gz': 'guangzhou',
+            'sz': 'shenzhen',
+            'hz': 'hangzhou',
+            'cd': 'chengdu',
+            'nj': 'nanjing',
+            'su': 'suzhou',
+            'xa': 'xian',
+            'cs': 'changsha',
+        }
+        
+        if target_subdomain not in direct_cities:
+            target_subdomain = abbr_to_full.get(target_subdomain, target_subdomain)
+
         # Demo/开发环境默认开启 Mock 以保障联调体验
         if not mock and settings.DEBUG:
             mock = True
 
-        # 若 region 为空，则默认全城抓取
-            
-        # 异步执行爬虫任务（开发/演示环境下占位实现，避免启动阶段导入失败）
-        def run_spider_task():
-            try:
-                # 延迟导入，避免在项目启动阶段因为缺失爬虫依赖导致失败
-                # 这里保留扩展点：后续可替换为真正的多源爬虫聚合函数
-                # from apps.spider.runner import run_all
-                # items = run_all(region=region, pages=pages, city_subdomain=city_subdomain)
-                # TODO: 将 items 写入数据库（House）
-                pass
-            except Exception as e:
-                # 保底：打印错误日志但不影响接口返回
-                print(f"[CrawlView] 后台爬虫任务启动失败: {e}")
+        # 1. 优先检查数据库是否有相关数据
+        # 注意：CrawlView 是强制更新接口，不应直接返回数据库旧数据。
+        # 如果需要“优先查库，无数据再爬”，应该是列表接口的逻辑，或者由前端控制。
+        # 但根据用户反馈“更新房源数据”时需要爬取新数据，因此这里不再直接返回旧数据，而是继续执行爬虫。
+        # 爬虫内部已有去重逻辑，会跳过旧数据。
         
-        thread = threading.Thread(target=run_spider_task)
-        thread.start()
+        # queryset = House.objects.all()
+        # ... (省略过滤逻辑) ...
+        # if queryset.exists():
+        #     ... return ...
 
-        return Response({
-            "status": "success",
-            "message": f"爬虫任务已后台启动 (City={city_subdomain}, Region={region or 'all'})",
-            "background": True,
-            "count": 0
-        })
+        # 2. 执行同步爬取
+        try:
+            from apps.spider.runner import run_all
+            logger.info(f"[CrawlView] 开始同步爬取: region={region}, pages={pages}")
+            
+            # 执行爬取 (同步阻塞)
+            # 使用处理后的 target_subdomain (如 wuhan) 传递给爬虫，确保爬虫和数据库查询一致
+            items = run_all(region=region, pages=pages, city_subdomain=target_subdomain)
+            
+            # 写入数据库并收集保存的对象
+            count = 0
+            # 无论是否新创建，都应该收集起来返回给前端，或者只返回新创建的？
+            # 这里的 items 已经是爬虫经过数据库去重后的新数据（如果在 FangSpider 中启用了去重）
+            # 或者包含所有抓取的数据（如果没启用去重）
+            # FangSpider 现在只返回 valid_items (新数据)
+            
+            saved_instances = []
+            
+            for item in items:
+                try:
+                    # 再次确保 update_or_create
+                    obj, created = House.objects.update_or_create(
+                        url=item.get('url'),
+                        defaults={
+                            'title': item.get('title', ''),
+                            'region': item.get('region', ''),
+                            'area': item.get('area'),
+                            'layout': item.get('layout', ''),
+                            'total_price': item.get('total_price'),
+                            'unit_price': item.get('unit_price'),
+                            'source': item.get('source', 'Fang'),
+                        }
+                    )
+                    if created:
+                        count += 1
+                        logger.info(f"保存新房源: {item.get('title')}")
+                    saved_instances.append(obj)
+                except Exception as db_err:
+                    logger.error(f"[CrawlView] 保存数据失败: {db_err} - {item.get('url')}")
+            
+            logger.info(f"[CrawlView] 爬虫任务完成，新增入库: {count} 条, 总抓取(新): {len(items)} 条")
+            
+            return Response({
+                "status": "success",
+                "message": f"已完成爬取，新增 {count} 条数据",
+                "background": False,
+                "count": count,
+                "data": HouseSerializer(saved_instances, many=True).data
+            })
+            
+        except Exception as e:
+            logger.error(f"[CrawlView] 爬虫执行失败: {e}", exc_info=True)
+            return Response({"error": f"爬虫执行失败: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class HouseListView(APIView):
     """
@@ -104,23 +167,27 @@ class HouseListView(APIView):
         min_price = request.query_params.get('min_price', 0)
         max_price = request.query_params.get('max_price', 100000)
         
-        qs = House.objects.all()
-        
-        # 应用区域过滤
-        if region:
-            import re
-            if re.search(r'[\u4e00-\u9fa5]', region):
-                from pypinyin import lazy_pinyin
-                region = ''.join(lazy_pinyin(region))
-            city_names = {'beijing','bj','shanghai','sh','wuhan','wh','guangzhou','gz','shenzhen','sz','hangzhou','hz','chengdu','cd','beijingshi','shanghaishi','wuhanshi','guangzhoushi','shenzhenshi','hangzhoushi','chengdoushi'}
-            if region.lower() not in city_names:
-                qs = qs.filter(region__icontains=region)
+        try:
+            qs = House.objects.all()
             
-        # 应用价格范围过滤
-        qs = qs.filter(total_price__gte=min_price, total_price__lte=max_price)
-        
-        # 限制返回数量，避免响应过大
-        return Response(HouseSerializer(qs[:100], many=True).data)
+            # 应用区域过滤
+            if region:
+                import re
+                if re.search(r'[\u4e00-\u9fa5]', region):
+                    from pypinyin import lazy_pinyin
+                    region = ''.join(lazy_pinyin(region))
+                city_names = {'beijing','bj','shanghai','sh','wuhan','wh','guangzhou','gz','shenzhen','sz','hangzhou','hz','chengdu','cd','beijingshi','shanghaishi','wuhanshi','guangzhoushi','shenzhenshi','hangzhoushi','chengdoushi'}
+                if region.lower() not in city_names:
+                    qs = qs.filter(region__icontains=region)
+                
+            # 应用价格范围过滤
+            qs = qs.filter(total_price__gte=min_price, total_price__lte=max_price)
+            
+            # 限制返回数量，避免响应过大
+            return Response(HouseSerializer(qs[:100], many=True).data)
+        except Exception as e:
+            logger.error(f"HouseListView error: {e}", exc_info=True)
+            return Response({"error": "Failed to fetch house list"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class RegionStatsView(APIView):
     """
