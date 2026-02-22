@@ -1,0 +1,11 @@
+Django==4.2.7
+djangorestframework
+django-cors-headers
+requests
+beautifulsoup4
+lxml
+pandas
+numpy
+scikit-learn
+pymysql
+python-dotenv
