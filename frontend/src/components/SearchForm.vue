@@ -153,8 +153,8 @@
   <!-- 爬虫控制弹窗 -->
   <el-dialog v-model="showCrawlDialog" title="更新房源数据" width="400px">
     <el-form :model="crawlForm" label-position="top">
-      <el-form-item label="城市子域名 (如: bj, sh)">
-        <el-input v-model="crawlForm.city_subdomain" placeholder="请输入城市缩写" />
+      <el-form-item label="城市子域名 (如: bj, wuhan，可留空自动识别)">
+        <el-input v-model="crawlForm.city_subdomain" placeholder="建议留空或输入完整拼音，如 wuhan" />
       </el-form-item>
       <el-form-item label="区域名称 (如: 朝阳)">
         <el-input v-model="crawlForm.region" placeholder="请输入区域名称" />

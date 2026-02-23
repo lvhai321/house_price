@@ -19,27 +19,31 @@ logger = logging.getLogger(__name__)
 
 class CrawlView(APIView):
     """
-    触发爬虫任务接口。
+    爬虫触发接口。
+    
+    用途：
+        - 接收前端传入的城市子域名、区域关键字和期望页数；
+        - 同步调用爬虫调度函数 run_all 获取本次抓取结果；
+        - 使用 update_or_create 将新数据写入数据库，并更新旧数据的价格等字段；
+        - 再从数据库中查询指定区域下的全部房源（历史 + 新抓）返回给前端。
+    
+    典型调用场景：
+        - 前端“更新房源数据”按钮；
+        - 运维脚本定期批量刷新某个城市/板块数据。
     """
     def post(self, request):
-        # 接收参数
+        # —— 1. 接收并预处理请求参数 ——
         city_subdomain = request.data.get('city_subdomain', 'bj').strip()
         region = request.data.get('region', '')
         
-        # 移除过时的 city_map 和 abbr_to_full 逻辑
-        # 因为 FangSpider 现在已经集成了 pypinyin，可以智能处理
-        
-        # 汉字转拼音逻辑 (Region)
-        # 如果包含汉字，转为拼音，例如 '朝阳' -> 'chaoyang'
-        if region:
-             import re
-             from pypinyin import lazy_pinyin
-             if re.search(r'[\u4e00-\u9fa5]', region):
-                 region = ''.join(lazy_pinyin(region))
+        original_region = region.strip() if isinstance(region, str) else ''
         
         # 兼容性处理：如果前端传了 region 且 region 和 city 重复（如 region="武汉" city="武汉"）
-        if region and city_subdomain and region == city_subdomain:
+        # 此时认为用户只指定了城市，不指定具体板块，region 置为空以覆盖整城
+        if original_region and city_subdomain and original_region == city_subdomain:
              region = None
+        else:
+             region = original_region
  
         try:
             mock = request.data.get('mock', False)
@@ -47,34 +51,24 @@ class CrawlView(APIView):
         except (ValueError, TypeError):
             pages = 3
 
-        # Demo/开发环境默认开启 Mock 以保障联调体验
+        # Demo/开发环境默认开启 Mock 标志，便于前后端联调
         if not mock and settings.DEBUG:
             mock = True
 
-        # 1. 优先检查数据库是否有相关数据
-        # CrawlView 强制执行爬虫逻辑，无需检查数据库是否存在
-        
-        # 统一处理城市输入：直接传给 FangSpider，由其内部的 _get_subdomain 统一处理
-        # 无论是 'wh', 'wuhan', '武汉' 还是 'sh', 'shanghai'
-        # FangSpider 现在具备智能识别能力
+        # 统一处理城市输入：直接传给 FangSpider，由其内部的 _get_subdomain 负责解析，
+        # 无论是 'wh'、'wuhan'、'武汉' 还是 'sh'、'shanghai' 均可识别。
         target_subdomain = city_subdomain
 
-        # 2. 执行同步爬取
+        # —— 2. 执行同步爬取并写库 ——
         try:
             from apps.spider.runner import run_all
             logger.info(f"[CrawlView] 开始同步爬取: region={region}, pages={pages}")
             
-            # 执行爬取 (同步阻塞)
-            # 使用 target_subdomain 传递给爬虫，确保爬虫和数据库查询一致
+            # 执行爬取（同步阻塞调用），返回的数据中已经带有 is_new 标记
             items = run_all(region=region, pages=pages, city_subdomain=target_subdomain)
             
-            # 写入数据库并收集保存的对象
+            # 写入数据库：对每个 URL 执行 update_or_create
             count = 0
-            # 无论是否新创建，都应该收集起来返回给前端，或者只返回新创建的？
-            # 这里的 items 已经是爬虫经过数据库去重后的新数据（如果在 FangSpider 中启用了去重）
-            # 或者包含所有抓取的数据（如果没启用去重）
-            # FangSpider 现在只返回 valid_items (新数据)
-            
             saved_instances = []
             
             for item in items:
@@ -99,14 +93,29 @@ class CrawlView(APIView):
                 except Exception as db_err:
                     logger.error(f"[CrawlView] 保存数据失败: {db_err} - {item.get('url')}")
             
-            logger.info(f"[CrawlView] 爬虫任务完成，新增入库: {count} 条, 总抓取(新): {len(items)} 条")
+            logger.info(f"[CrawlView] 爬虫任务完成，新增入库: {count} 条, 总抓取(含旧): {len(items)} 条")
+            
+            # 统一从数据库中查询当前区域下的所有房源（历史 + 本次新抓）
+            # 这样前端拿到的数据就是完整集合，而不是仅本次新增
+            try:
+                qs = House.objects.all()
+                if original_region:
+                    qs = qs.filter(region__icontains=original_region)
+                # 为避免返回过大，这里限制最多返回最近 500 条
+                combined_instances = list(qs.order_by('-id')[:500])
+                total_count = qs.count()
+            except Exception as agg_err:
+                logger.error(f"[CrawlView] 聚合数据库数据失败: {agg_err}")
+                combined_instances = saved_instances
+                total_count = len(saved_instances)
             
             return Response({
                 "status": "success",
                 "message": f"已完成爬取，新增 {count} 条数据",
                 "background": False,
-                "count": count,
-                "data": HouseSerializer(saved_instances, many=True).data
+                "new_count": count,
+                "total": total_count,
+                "data": HouseSerializer(combined_instances, many=True).data
             })
             
         except Exception as e:
@@ -115,8 +124,12 @@ class CrawlView(APIView):
 
 class HouseListView(APIView):
     """
-    房源列表接口。
-    支持按区域、价格范围筛选房源数据。
+    房源列表查询接口。
+    
+    主要功能：
+        - 支持按区域关键字进行模糊搜索（适配“武汉-白沙洲”这类复合区域名）；
+        - 支持按总价区间筛选房源；
+        - 默认返回前 100 条记录，避免响应体过大。
     """
     def get(self, request):
         """
@@ -137,14 +150,17 @@ class HouseListView(APIView):
         try:
             qs = House.objects.all()
             
-            # 应用区域过滤
+            # 应用区域过滤：直接按传入字符串做模糊匹配
+            # 兼容城市级关键词（如“北京”、“bj”、“wuhan”），此时不过滤，让前端看到全城数据
             if region:
-                import re
-                if re.search(r'[\u4e00-\u9fa5]', region):
-                    from pypinyin import lazy_pinyin
-                    region = ''.join(lazy_pinyin(region))
-                city_names = {'beijing','bj','shanghai','sh','wuhan','wh','guangzhou','gz','shenzhen','sz','hangzhou','hz','chengdu','cd','beijingshi','shanghaishi','wuhanshi','guangzhoushi','shenzhenshi','hangzhoushi','chengdoushi'}
-                if region.lower() not in city_names:
+                city_keywords = {
+                    'beijing','bj','shanghai','sh','wuhan','wh',
+                    'guangzhou','gz','shenzhen','sz','hangzhou','hz',
+                    'chengdu','cd','beijingshi','shanghaishi','wuhanshi',
+                    'guangzhoushi','shenzhenshi','hangzhoushi','chengdoushi',
+                    '北京','上海','武汉','广州','深圳','杭州','成都'
+                }
+                if region.lower() not in city_keywords and region not in city_keywords:
                     qs = qs.filter(region__icontains=region)
                 
             # 应用价格范围过滤
@@ -159,7 +175,10 @@ class HouseListView(APIView):
 class RegionStatsView(APIView):
     """
     区域统计接口。
-    提供各区域的房价趋势数据（模拟最近6个月的走势）。
+    
+    用途：
+        - 基于数据库中现有房源的单价均值，构造最近 6 个月的价格走势曲线；
+        - 当数据库暂无数据时，使用城市级默认均价做兜底，保证前端有可视化展示。
     """
     def get(self, request):
         """
@@ -175,13 +194,7 @@ class RegionStatsView(APIView):
         # 获取当前查询的区域（如果未传，默认为 'beijing'）
         region = request.query_params.get('region', 'beijing')
         
-        # 处理中文区域名转拼音
-        import re
-        if re.search(r'[\u4e00-\u9fa5]', region):
-            from pypinyin import lazy_pinyin
-            region = ''.join(lazy_pinyin(region))
-        
-        # 获取该区域当前的真实均价
+        # 直接使用传入的区域关键字做模糊匹配
         current_avg = House.objects.filter(region__icontains=region).aggregate(Avg('unit_price'))
         base_price = current_avg.get('unit_price__avg')
         
@@ -257,14 +270,6 @@ class PriceEstimationView(APIView):
         
         req_data = req.validated_data
 
-        # 处理区域字段：如果是中文，转为拼音
-        region = req_data.get('region')
-        if region:
-            import re
-            from pypinyin import lazy_pinyin
-            if re.search(r'[\u4e00-\u9fa5]', region):
-                req_data['region'] = ''.join(lazy_pinyin(region))
-        
         # 初始化估价服务
         estimator = PriceEstimator(req_data)
         # 执行估价计算

@@ -95,10 +95,12 @@ def fetch(url, session=None, rate_limiter=None, retries=3, use_proxy=False):
             # 动态轮换 User-Agent
             session.headers["User-Agent"] = get_random_ua()
             
-            proxies = None
+            # 如果 use_proxy 为 False，显式禁用代理（避免读取系统环境变量）
+            proxies = {"http": None, "https": None}
             if use_proxy:
-                proxies = get_proxy()
-                if proxies:
+                p = get_proxy()
+                if p:
+                    proxies = p
                     logger.info(f"Using proxy: {proxies}")
 
             response = session.get(url, timeout=10, proxies=proxies)

@@ -169,7 +169,15 @@ class PriceEstimator:
         根据区域获取城市基准单价 (2025/2026年参考均价)。
         用于兜底估价。
         """
+        # 支持中文区域名：若包含中文，先转为拼音再做基准价匹配
         region_lower = region.lower()
+        try:
+            if any('\u4e00' <= ch <= '\u9fff' for ch in region):
+                from pypinyin import lazy_pinyin
+                region_lower = ''.join(lazy_pinyin(region)).lower()
+        except Exception:
+            # 转换失败则退回原始小写字符串
+            region_lower = region.lower()
         
         # 城市基准价字典 (单位: 元/平米)
         benchmarks = {

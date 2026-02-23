@@ -1,7 +1,7 @@
 -- Database initialization script
--- For SQLite, this is mostly for reference as Django handles schema creation via migrations.
+-- 示例：MySQL 初始化脚本片段（Django 仍以迁移为主）
 
--- Example for MySQL/PostgreSQL:
+-- Example for MySQL:
 -- CREATE DATABASE IF NOT EXISTS house_price_db;
 -- USE house_price_db;
 

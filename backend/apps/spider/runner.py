@@ -1,7 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from apps.spider.lianjia import LianjiaSpider
 from apps.spider.fang import FangSpider
-from apps.spider.anjuke import AnjukeSpider
 from apps.spider.utils.validate import filter_valid, dedup_by_url, is_valid_area, is_valid_price
 from django.utils import timezone
 from apps.spider.models import House
@@ -12,13 +10,11 @@ def run_all(region, pages=3, max_daily=1000, city_subdomain=None):
     logger = logging.getLogger("spider.runner")
     if not city_subdomain:
         if region in ("wuhan", "武汉"):
-            city_subdomain = "wh"
+            city_subdomain = "wuhan"
         else:
             city_subdomain = "bj"
     spiders = [
-        # LianjiaSpider(region=region, pages=pages, city_subdomain=city_subdomain),
         FangSpider(region=region, pages=pages, city_subdomain=city_subdomain, use_proxy=False),
-        # AnjukeSpider(region=region, pages=pages, city_subdomain=city_subdomain)
     ]
     results = []
     stats = {}
