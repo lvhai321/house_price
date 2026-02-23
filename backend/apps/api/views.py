@@ -22,75 +22,42 @@ class CrawlView(APIView):
     触发爬虫任务接口。
     """
     def post(self, request):
-        region = request.data.get('region')
-        city_subdomain = request.data.get('city_subdomain', 'bj')
-        workers = int(request.data.get('workers', 2))
-        storage = request.data.get('storage', 'db')
-        mock = request.data.get('mock', False)
-        use_proxy = request.data.get('use_proxy', None)
+        # 接收参数
+        city_subdomain = request.data.get('city_subdomain', 'bj').strip()
+        region = request.data.get('region', '')
         
+        # 移除过时的 city_map 和 abbr_to_full 逻辑
+        # 因为 FangSpider 现在已经集成了 pypinyin，可以智能处理
+        
+        # 汉字转拼音逻辑 (Region)
+        # 如果包含汉字，转为拼音，例如 '朝阳' -> 'chaoyang'
+        if region:
+             import re
+             from pypinyin import lazy_pinyin
+             if re.search(r'[\u4e00-\u9fa5]', region):
+                 region = ''.join(lazy_pinyin(region))
+        
+        # 兼容性处理：如果前端传了 region 且 region 和 city 重复（如 region="武汉" city="武汉"）
+        if region and city_subdomain and region == city_subdomain:
+             region = None
+ 
         try:
+            mock = request.data.get('mock', False)
             pages = int(request.data.get('pages', 3))
         except (ValueError, TypeError):
             pages = 3
-            
-        # 汉字转拼音逻辑
-        if region:
-            import re
-            from pypinyin import lazy_pinyin
-            # 如果包含汉字
-            if re.search(r'[\u4e00-\u9fa5]', region):
-                # 将汉字转换为拼音列表，并拼接成字符串
-                # 例如: '朝阳' -> ['chao', 'yang'] -> 'chaoyang'
-                region = ''.join(lazy_pinyin(region))
-
-        # 如果传入的是城市名/缩写，则视为全城抓取
-        city_map = {
-            'bj': {'beijing', 'bj', 'beijingshi'},
-            'sh': {'shanghai', 'sh', 'shanghaishi'},
-            'wh': {'wuhan', 'wh', 'wuhanshi'},
-            'gz': {'guangzhou', 'gz', 'guangzhoushi'},
-            'sz': {'shenzhen', 'sz', 'shenzhenshi'},
-            'hz': {'hangzhou', 'hz', 'hangzhoushi'},
-            'cd': {'chengdu', 'cd', 'chengdoushi'},
-        }
-        synonyms = city_map.get(city_subdomain, set())
-        if region and region.lower() in synonyms:
-            region = None
-
-        # 计算真实的目标子域名 (处理缩写 -> 全拼)
-        # 直辖市保留缩写，其他城市转全拼
-        target_subdomain = city_subdomain
-        direct_cities = {'bj', 'sh', 'tj', 'cq'}
-        abbr_to_full = {
-            'wh': 'wuhan',
-            'gz': 'guangzhou',
-            'sz': 'shenzhen',
-            'hz': 'hangzhou',
-            'cd': 'chengdu',
-            'nj': 'nanjing',
-            'su': 'suzhou',
-            'xa': 'xian',
-            'cs': 'changsha',
-        }
-        
-        if target_subdomain not in direct_cities:
-            target_subdomain = abbr_to_full.get(target_subdomain, target_subdomain)
 
         # Demo/开发环境默认开启 Mock 以保障联调体验
         if not mock and settings.DEBUG:
             mock = True
 
         # 1. 优先检查数据库是否有相关数据
-        # 注意：CrawlView 是强制更新接口，不应直接返回数据库旧数据。
-        # 如果需要“优先查库，无数据再爬”，应该是列表接口的逻辑，或者由前端控制。
-        # 但根据用户反馈“更新房源数据”时需要爬取新数据，因此这里不再直接返回旧数据，而是继续执行爬虫。
-        # 爬虫内部已有去重逻辑，会跳过旧数据。
+        # CrawlView 强制执行爬虫逻辑，无需检查数据库是否存在
         
-        # queryset = House.objects.all()
-        # ... (省略过滤逻辑) ...
-        # if queryset.exists():
-        #     ... return ...
+        # 统一处理城市输入：直接传给 FangSpider，由其内部的 _get_subdomain 统一处理
+        # 无论是 'wh', 'wuhan', '武汉' 还是 'sh', 'shanghai'
+        # FangSpider 现在具备智能识别能力
+        target_subdomain = city_subdomain
 
         # 2. 执行同步爬取
         try:
@@ -98,7 +65,7 @@ class CrawlView(APIView):
             logger.info(f"[CrawlView] 开始同步爬取: region={region}, pages={pages}")
             
             # 执行爬取 (同步阻塞)
-            # 使用处理后的 target_subdomain (如 wuhan) 传递给爬虫，确保爬虫和数据库查询一致
+            # 使用 target_subdomain 传递给爬虫，确保爬虫和数据库查询一致
             items = run_all(region=region, pages=pages, city_subdomain=target_subdomain)
             
             # 写入数据库并收集保存的对象
