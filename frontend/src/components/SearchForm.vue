@@ -163,6 +163,24 @@
         <el-input-number v-model="crawlForm.pages" :min="1" :max="50" />
       </el-form-item>
     </el-form>
+    <div v-if="crawling" class="crawl-status">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="正在更新房源数据"
+        description="本次更新可能持续数十秒，最多等待约 60 秒，请耐心等待。"
+      />
+    </div>
+    <div v-else class="crawl-status">
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="更新说明"
+        description="默认每次约抓取 60 条最新房源数据，过程可能需要 10~60 秒。"
+      />
+    </div>
     <template #footer>
       <span class="dialog-footer">
         <el-button @click="showCrawlDialog = false">取消</el-button>
@@ -196,7 +214,7 @@ const crawlForm = reactive({
   // 将城市子域名默认值设为空，让后端自动判断
   city_subdomain: '',
   region: '',
-  pages: 3
+  pages: 1
 })
 
 const handleCrawl = async () => {

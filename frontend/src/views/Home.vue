@@ -399,7 +399,7 @@ onMounted(() => {
 
 .house-item {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   padding: 20px 24px;
   border-bottom: 1px solid #f1f5f9;
@@ -438,10 +438,14 @@ onMounted(() => {
   border-color: #cbd5e1;
 }
 
+.house-info {
+  flex: 1;
+}
+
 .house-price {
   text-align: right;
   margin-right: 20px;
-  min-width: 120px;
+  width: 120px;
 }
 
 .house-price .total {

@@ -22,7 +22,7 @@ class FangSpider(BaseSpider):
     例如：
         武汉塔子湖 → https://wuhan.esf.fang.com/house/i31-kw武汉/
     """
-    def __init__(self, region=None, pages=3, city_subdomain="bj", use_proxy=False):
+    def __init__(self, region=None, pages=1, city_subdomain="bj", use_proxy=False):
         """
         初始化房天下爬虫实例。
         

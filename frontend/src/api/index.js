@@ -10,7 +10,7 @@ const api = axios.create({
     // 开发环境下通过 Vite 代理转发到后端 (http://localhost:8000)
     // 生产环境需根据部署配置进行调整
     baseURL: '/api', 
-    timeout: 10000   // 请求超时时间设置为 10 秒
+    timeout: 60000   // 请求超时时间设置为 60 秒
 })
 
 /**

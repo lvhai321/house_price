@@ -47,9 +47,9 @@ class CrawlView(APIView):
  
         try:
             mock = request.data.get('mock', False)
-            pages = int(request.data.get('pages', 3))
+            pages = int(request.data.get('pages', 1))
         except (ValueError, TypeError):
-            pages = 3
+            pages = 1
 
         # Demo/开发环境默认开启 Mock 标志，便于前后端联调
         if not mock and settings.DEBUG:
