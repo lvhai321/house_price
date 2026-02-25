@@ -1,30 +1,41 @@
 /**
- * 格式化工具函数模块
- * 提供通用的数据格式化方法，如价格、日期等。
+ * 通用格式化工具模块
+ * ----------------
+ * 包含金额千分位转换、日期美化等 UI 展示相关的辅助函数。
  */
 
 /**
- * 格式化价格
- * 将价格（元）转换为（万元），并保留两位小数。
- * 
- * @param {number|string} val - 原始价格（元）
- * @returns {string} 格式化后的价格（万元），如 "500.00"
+ * 【价格千分位格式化】
+ * 将数字转换为带有千分位分隔符的字符串，并保留两位小数。
+ * 示例: 1234567.89 -> "1,234,567.89"
  */
-export const formatPrice = (val) => {
-  if (!val) return '0'
-  // 转换为浮点数并除以 10000
-  return (parseFloat(val) / 10000).toFixed(2)
+export const formatPrice = (price) => {
+  if (price === null || price === undefined) return '0.00'
+  return new Intl.NumberFormat('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(price)
 }
 
 /**
- * 格式化日期
- * 将 Date 对象或时间戳转换为本地化的日期字符串。
- * 
- * @param {Date|number} date - 日期对象或时间戳，默认为当前时间
- * @returns {string} 本地化日期字符串 (例如: "2023/10/27 10:30:00")
+ * 【日期美化】
+ * 获取当前时间并转换为本地日期字符串。
+ * 示例: "2024年2月25日"
  */
 export const formatDate = (date = new Date()) => {
-  // 如果是时间戳，转换为 Date 对象
-  const d = date instanceof Date ? date : new Date(date)
-  return d.toLocaleString()
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+/**
+ * 【百分比格式化】
+ * 将小数转换为百分比字符串。
+ * 示例: 0.85 -> "85%"
+ */
+export const formatPercent = (val) => {
+  if (val === null || val === undefined) return '0%'
+  return `${Math.round(val * 100)}%`
 }

@@ -1,13 +1,12 @@
 <!--
   搜索表单组件 (SearchForm.vue)
+  ---------------------------
+  负责收集用户输入的房屋详细参数，是整个估价系统的输入源。
   
-  功能描述：
-  提供房产估价所需的各项参数输入界面。
-  
-  主要特性：
-  1. 表单验证：使用 Element Plus Form 验证机制确保必填项。
-  2. 交互优化：提供快捷特征开关（地铁、学区），支持重置和历史记录调用。
-  3. 数据暴露：通过 defineExpose 暴露 setFormValues 方法，供父组件回填历史数据。
+  核心功能：
+  1. 参数输入：支持区域、面积、户型、楼层、朝向、装修等维度的选择。
+  2. 爬虫触发：内置“更新房源数据”弹窗，可实时调用后端爬虫抓取新数据。
+  3. 特征切换：提供直观的“近地铁”、“学区房”快捷开关。
 -->
 <template>
   <el-card class="box-card form-card" shadow="never">
@@ -18,16 +17,16 @@
           房源参数
         </span>
         <div class="header-actions">
-          <!-- 查看历史记录按钮 -->
-          <el-button link @click="$emit('show-history')" type="primary" size="small">
+          <!-- 查看历史估价记录 -->
+          <el-button link @click="$emit('show-history')" type="primary" size="small" title="历史记录">
             <el-icon><Clock /></el-icon>
           </el-button>
-          <!-- 更新数据按钮 -->
-          <el-button link @click="showCrawlDialog = true" type="success" size="small">
+          <!-- 唤起爬虫更新数据弹窗 -->
+          <el-button link @click="showCrawlDialog = true" type="success" size="small" title="更新数据">
             <el-icon><Download /></el-icon>
           </el-button>
-          <!-- 重置表单按钮 -->
-          <el-button link @click="resetForm" type="info" size="small">
+          <!-- 清空当前表单 -->
+          <el-button link @click="resetForm" type="info" size="small" title="重置">
             <el-icon><RefreshRight /></el-icon>
           </el-button>
         </div>

@@ -1,3 +1,9 @@
+"""
+网络请求工具模块
+----------------
+封装了基于 requests 库的 HTTP 请求逻辑。
+提供随机 User-Agent 切换、速率限制（防止封 IP）、代理池对接以及自动重试机制。
+"""
 import requests
 import time
 import random
@@ -7,82 +13,73 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger("spider.http")
 
-# 扩展的 User-Agent 池
+# 常见的浏览器 User-Agent 池，用于模拟真实用户访问
 USER_AGENTS = [
-    # Chrome
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    # Firefox
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
-    # Safari
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-    # Edge
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
 ]
 
 def get_random_ua():
+    """随机获取一个 User-Agent"""
     return random.choice(USER_AGENTS)
 
 def get_session():
     """
-    创建一个带有默认配置的 requests.Session 对象。
+    【会话工厂】
+    创建一个配置好基础请求头的 requests.Session 对象。
+    使用 Session 可以保持 Cookie，并复用 TCP 连接，显著提升抓取效率。
     """
     session = requests.Session()
     session.headers.update({
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "User-Agent": get_random_ua(),  # 初始随机 UA
+        "User-Agent": get_random_ua(),
     })
     return session
 
 class RateLimiter:
     """
-    速率限制器，用于在请求之间添加随机延迟。
+    【速率限制器】
+    在两次请求之间引入随机的停顿时间，降低被目标网站反爬虫系统识别的概率。
     """
     def __init__(self, jitter_range=(1.0, 3.0)):
         self.min_delay, self.max_delay = jitter_range
 
     def wait(self):
+        """执行等待（阻塞当前线程）"""
         delay = random.uniform(self.min_delay, self.max_delay)
         time.sleep(delay)
 
 def get_proxy():
     """
-    获取代理 IP。
-    支持从环境变量 PROXY_POOL_URL 获取代理，或者直接配置代理列表。
-    这里仅作为示例，实际需对接代理池 API。
+    【代理获取】
+    对接外部代理池 API。若环境变量中配置了 PROXY_POOL_URL，则从中提取一个有效代理 IP。
     """
-    proxy_url = os.getenv("PROXY_POOL_URL") # 例如: http://localhost:5010/get/
+    proxy_url = os.getenv("PROXY_POOL_URL")
     if proxy_url:
         try:
             resp = requests.get(proxy_url, timeout=2)
             if resp.status_code == 200:
-                # 假设返回格式为 {"proxy": "1.2.3.4:8080"} 或直接 "1.2.3.4:8080"
-                # 这里做简单处理，视具体代理池实现而定
                 proxy = resp.json().get("proxy") if "proxy" in resp.json() else resp.text
                 return {"http": f"http://{proxy}", "https": f"http://{proxy}"}
         except Exception as e:
-            logger.warning(f"Failed to get proxy from pool: {e}")
-    
+            logger.warning(f"无法从代理池获取 IP: {e}")
     return None
 
 def fetch(url, session=None, rate_limiter=None, retries=3, use_proxy=False):
     """
-    发送 GET 请求获取页面内容。
+    【核心：网页抓取器】
+    发送安全、健壮的 GET 请求。
     
-    参数:
-        url (str): 目标 URL
-        session (requests.Session): 会话对象
-        rate_limiter (RateLimiter): 速率限制器
-        retries (int): 重试次数
-        use_proxy (bool): 是否使用代理
-        
-    返回:
-        str: 响应的文本内容
+    特性：
+    1. 自动重试：遇到网络抖动或临时封禁时，支持指数退避重试。
+    2. 动态 UA：每次重试都会更换新的浏览器标识。
+    3. 代理支持：若开启 use_proxy，则尝试通过代理访问。
+    4. 反爬检测：自动识别并拦截登录重定向或验证码页面。
     """
     if session is None:
         session = get_session()
@@ -92,43 +89,35 @@ def fetch(url, session=None, rate_limiter=None, retries=3, use_proxy=False):
         
     for attempt in range(retries):
         try:
-            # 动态轮换 User-Agent
+            # 1. 动态更换 User-Agent
             session.headers["User-Agent"] = get_random_ua()
             
-            # 如果 use_proxy 为 False，显式禁用代理（避免读取系统环境变量）
+            # 2. 代理准备
             proxies = {"http": None, "https": None}
             if use_proxy:
                 p = get_proxy()
-                if p:
-                    proxies = p
-                    logger.info(f"Using proxy: {proxies}")
+                if p: proxies = p
 
+            # 3. 发起请求
             response = session.get(url, timeout=10, proxies=proxies)
             
-            # 检查 HTTP 状态码
+            # 4. 状态校验与反爬拦截
             if response.status_code == 200:
-                # 简单的反爬检查（如链家重定向到登录页）
-                if "captcha" in response.url or "login" in response.url or "verify" in response.url:
-                    # 针对安居客，有时虽然 url 有 verify 但其实是验证页面，需要进一步检查内容
-                    if "anjuke" in url and "verify" in response.url:
-                         # 降低日志级别，不要抛出异常，让解析器去判断 title
-                         # logger.warning(f"Anjuke verify page detected: {response.url}")
-                         # raise Exception("Redirected to captcha/login page")
-                         pass
-                    
-                    # 针对链家
-                    elif "lianjia" in url and ("login" in response.url or "captcha" in response.url):
-                         raise Exception("Redirected to captcha/login page")
-                         
+                # 检测是否被重定向到了验证码或登录页
+                lowered_url = response.url.lower()
+                if any(k in lowered_url for k in ["captcha", "login", "verify"]):
+                    if "lianjia" in url: # 链家反爬严，直接抛异常重试
+                         raise Exception("命中链家反爬，已重定向至登录/验证码页")
                 return response.text
+                
             elif response.status_code in [403, 429]:
-                # 遇到 403/429 禁止访问，可能是 IP 被封，尝试重试（如果开启了代理，下一次重试会换代理）
-                raise Exception(f"Anti-scraping block (Status {response.status_code})")
+                raise Exception(f"目标站点拒绝访问 (Status {response.status_code})，可能 IP 被封")
             else:
                 response.raise_for_status()
                 
         except Exception as e:
-            logger.warning(f"[Fetch Error] {url}: {e} (Attempt {attempt + 1}/{retries})")
-            time.sleep(2 * (attempt + 1))  # 指数退避
+            logger.warning(f"抓取失败: {url} | 错误: {e} | 正在进行第 {attempt + 1} 次重试...")
+            # 随着重试次数增加，等待时间变长（指数退避）
+            time.sleep(2 * (attempt + 1))
             
-    raise Exception(f"Failed to fetch {url} after {retries} attempts")
+    raise Exception(f"在 {retries} 次尝试后，依然无法获取页面: {url}")

@@ -6,31 +6,35 @@ from .models import EstimationHistory
 
 class PriceEstimator:
     """
-    房价估算服务类。
-    基于相似房源比较法（Market Comparison Approach）和特征调整法进行估价。
+    房价估算核心服务类。
+    ------------------
+    该类实现了“市场比较法”（Market Comparison Approach）的简化版逻辑。
+    通过在数据库中寻找相似房源，计算加权平均单价，并根据目标房源的各项特征（楼层、朝向、装修等）进行系数修正，
+    从而得出一个科学、合理的预估价格。
     """
     def __init__(self, query_params):
         """
-        初始化估价器。
+        初始化估价引擎。
         
         参数:
-            query_params (dict): 包含房屋特征的字典，应包括:
-            - region (str): 区域
-            - area (float): 面积
-            - layout (str): 户型
-            - has_subway (bool): 是否近地铁
-            - is_school_district (bool): 是否学区房
-            - floor_type (str): 楼层类型 ('low', 'mid', 'high')
-            - building_age (int): 房龄
-            - decoration (str): 装修 ('rough', 'simple', 'exquisite')
-            - orientation (str): 朝向 ('east', 'west', 'south', 'north')
+            query_params (dict): 前端传来的房源特征字典，包含：
+            - region (str): 区域（如：武汉-白沙洲）
+            - area (float): 建筑面积 (㎡)
+            - layout (str): 户型（如：3室2厅）
+            - has_subway (bool): 是否靠近地铁站
+            - is_school_district (bool): 是否属于优质学区
+            - floor_type (str): 楼层高低 ('low', 'mid', 'high')
+            - building_age (int): 建筑房龄（年）
+            - decoration (str): 装修程度 ('rough'-毛坯, 'simple'-简装, 'exquisite'-精装)
+            - orientation (str): 房屋朝向 ('south'-南, 'north'-北, 'east'-东, 'west'-西)
         """
         self.params = query_params
         self.similar_houses = []
     
     def parse_layout(self, layout_str):
         """
-        解析户型字符串，如 '2室1厅' 解析为 (2, 1)。
+        解析户型字符串。
+        例如：将 '2室1厅' 转化为数字元组 (2, 1)，便于后续进行数学比较。
         """
         if not layout_str:
             return (0, 0)
@@ -42,24 +46,24 @@ class PriceEstimator:
 
     def calculate_similarity(self, house):
         """
-        计算目标房源与数据库中某房源的相似度得分（0-100）。
+        计算目标房源与库中某条房源的“相似度得分”（满分 100 分）。
         
-        打分规则:
-        1. 区域 (40%): 完全匹配得40分，包含匹配得30分。
-        2. 面积 (30%): 差异在10%以内得30分，20%以内得20分，30%以内得10分。
-        3. 户型 (20%): 完全匹配得20分，室数差1得10分，室数相同得15分。
-        4. 其他 (10%): 基础分5分。
+        评分维度及权重：
+        1. 区域匹配 (40%): 区域完全一致得 40 分，包含关系（如：武汉 vs 武汉-白沙洲）得 30 分。
+        2. 面积接近 (30%): 面积差异越小得分越高。10%以内得满分，超过30%则该项得 10 分。
+        3. 户型相似 (20%): 室数和厅数完全一致得满分，室数差 1 间则减分。
+        4. 其他基础分 (10%): 默认赋予 5 分作为基础权重。
         """
         score = 0
         
-        # 1. 区域匹配度 (权重 40%)
+        # 1. 区域匹配度计算
         if house.region == self.params['region']:
             score += 40
         else:
             if self.params['region'] in house.region or house.region in self.params['region']:
                 score += 30
         
-        # 2. 面积接近度 (权重 30%)
+        # 2. 面积接近度计算
         diff_pct = abs(house.area - self.params['area']) / self.params['area']
         if diff_pct <= 0.10:
             score += 30
@@ -68,7 +72,7 @@ class PriceEstimator:
         elif diff_pct <= 0.30:
             score += 10
             
-        # 3. 户型相似度 (权重 20%)
+        # 3. 户型相似度计算
         q_shi, q_ting = self.parse_layout(self.params['layout'])
         h_shi, h_ting = self.parse_layout(house.layout)
         
@@ -79,58 +83,59 @@ class PriceEstimator:
         elif q_shi == h_shi:
             score += 15
             
-        # 4. 其他因素 (权重 10%)
+        # 4. 基础分
         score += 5
         
         return score
 
     def find_similar_houses(self):
         """
-        在数据库中查找相似房源。
-        筛选条件: 
-        1. 优先查找: 同一区域，面积在目标面积的 60%-140% 之间。
-        2. 降级查找 (方案A): 如果上述条件未找到足够房源，尝试放宽面积限制 (40%-160%)。
-        3. 最终降级 (方案A): 仅按区域匹配，不限制面积。
-        按相似度得分排序。
+        在数据库中检索相似的参考房源。
+        
+        采用三层“降级检索”策略，确保即便数据稀少也能找到参考：
+        - 第一层：精准匹配。同一区域且面积差异在 ±40% 以内的房源。
+        - 第二层：放宽面积。若第一层不满 5 条，将面积差异放宽至 ±60%。
+        - 第三层：仅匹配区域。若依然不足，则不再限制面积，只匹配该区域的所有房源。
+        
+        检索完成后，会根据 calculate_similarity 进行打分并由高到低排序。
         """
         area = self.params['area']
         
-        # 第一阶段：标准搜索 (面积 60%-140%)
+        # 策略一：标准搜索
         qs = House.objects.filter(
             region__icontains=self.params['region'],
             area__gte=area * 0.6,
             area__lte=area * 1.4
         )
         
-        # 降级策略 (方案A): 如果数据不足5条，放宽条件
+        # 策略二：如果数据太少，放宽面积限制
         if qs.count() < 5:
-            # 第二阶段：放宽面积 (面积 40%-160%)
             qs = House.objects.filter(
                 region__icontains=self.params['region'],
                 area__gte=area * 0.4,
                 area__lte=area * 1.6
             )
             
+            # 策略三：极端情况，只管区域，不管面积
             if qs.count() < 5:
-                # 第三阶段：仅按区域匹配 (取消面积限制)
                 qs = House.objects.filter(region__icontains=self.params['region'])
         
         scored_houses = []
         for h in qs:
             score = self.calculate_similarity(h)
-            # 在降级模式下，适当放宽分数要求
+            # 根据搜索结果的数量，动态调整入选分数门槛
             min_score = 30 if qs.count() < 5 else 50
             if score >= min_score: 
                 scored_houses.append((h, score))
         
-        # 按分数降序排列
+        # 按相似度分数从高到低排序
         self.similar_houses = sorted(scored_houses, key=lambda x: x[1], reverse=True)
         return self.similar_houses
 
     def get_search_results(self):
         """
-        获取当前区域的搜索结果（非相似房源，仅用于展示搜索结果）。
-        获取最新的5条房源。
+        获取该区域最新的房源记录。
+        仅用于前端展示“该区域最新房源”，不直接参与估价计算。
         """
         return House.objects.filter(
             region__icontains=self.params['region']
@@ -138,152 +143,139 @@ class PriceEstimator:
 
     def calculate_base_price(self):
         """
-        计算基础估价。
-        使用相似房源的加权平均单价 * 目标面积。
-        权重为相似度得分。
+        计算基础预估价格。
+        ----------------
+        算法逻辑：
+        1. 排除单价过高（>20万）或过低（<2000元）的异常噪音数据。
+        2. 对筛选出的相似房源执行“加权平均”：
+           相似度得分越高的房源，对最终价格的影响力越大。
+        3. 加权平均单价 * 目标房源面积 = 基础总价。
         """
         if not self.similar_houses:
             return None
             
-        total_score = sum(s for h, s in self.similar_houses)
-        
-        # 异常值过滤: 过滤单价 > 200000 或 < 2000 的极端数据
+        # 异常值过滤：剔除可能干扰结果的极端单价
         valid_houses = [
             (h, s) for h, s in self.similar_houses 
             if 2000 <= h.unit_price <= 200000
         ]
         
         if not valid_houses:
-             # 如果过滤后为空，回退到原始数据
              valid_houses = self.similar_houses
              
         total_score = sum(s for h, s in valid_houses)
         
-        # 加权平均单价 = sum(单价 * 分数) / 总分数
+        # 执行加权平均计算
         weighted_unit_price = sum(h.unit_price * Decimal(s) for h, s in valid_houses) / Decimal(total_score)
         base_total = weighted_unit_price * Decimal(self.params['area'])
         return base_total
 
     def get_city_benchmark_price(self, region):
         """
-        根据区域获取城市基准单价 (2025/2026年参考均价)。
-        用于兜底估价。
+        【兜底机制】获取城市基准单价。
+        ---------------------------
+        如果数据库中没有任何相似房源可供参考，则根据预设的各城市/热门区域基准价进行估算。
+        这些数据反映了 2025/2026 年度的宏观市场水位。
         """
-        # 支持中文区域名：若包含中文，先转为拼音再做基准价匹配
         region_lower = region.lower()
         try:
+            # 如果包含中文，尝试转为拼音进行匹配
             if any('\u4e00' <= ch <= '\u9fff' for ch in region):
                 from pypinyin import lazy_pinyin
                 region_lower = ''.join(lazy_pinyin(region)).lower()
         except Exception:
-            # 转换失败则退回原始小写字符串
             region_lower = region.lower()
         
-        # 城市基准价字典 (单位: 元/平米)
+        # 预设的各主要城市及热门板块基准价 (单位: 元/㎡)
         benchmarks = {
-            # 一线城市
             'bj': 55000, 'beijing': 55000,
             'sh': 58000, 'shanghai': 58000,
             'sz': 56000, 'shenzhen': 56000,
             'gz': 32000, 'guangzhou': 32000,
-            
-            # 新一线/二线城市
             'hz': 28000, 'hangzhou': 28000,
-            'nj': 22000, 'nanjing': 22000,
-            'su': 20000, 'suzhou': 20000,
-            'wh': 16000, 'wuhan': 16000,  # 武汉
+            'wh': 16000, 'wuhan': 16000,
             'cd': 15000, 'chengdu': 15000,
-            'cq': 12000, 'chongqing': 12000,
-            'tj': 14000, 'tianjin': 14000,
-            'xa': 13000, 'xian': 13000,
-            
-            # 常见区域名匹配
-            'chaoyang': 58000, # 北京朝阳
-            'haidian': 85000,  # 北京海淀
-            'dongcheng': 90000, # 北京东城
-            'xicheng': 95000,  # 北京西城
-            'pudong': 52000,   # 上海浦东
-            'huangpu': 80000,  # 上海黄浦
+            'chaoyang': 58000, 'haidian': 85000,
+            'pudong': 52000, 'huangpu': 80000,
         }
         
-        # 尝试精确匹配
+        # 优先精准匹配，其次模糊匹配
         if region_lower in benchmarks:
             return Decimal(benchmarks[region_lower])
             
-        # 尝试模糊匹配 (如 'wuhan-洪山区' -> 匹配 'wuhan')
         for key, price in benchmarks.items():
             if key in region_lower:
                 return Decimal(price)
                 
-        # 默认兜底价 (三线城市水平)
+        # 最终兜底价格（按三线城市水平设定）
         return Decimal(10000)
 
     def get_adjustment_factor(self):
         """
-        计算特征调整系数。
-        根据地铁、学区、楼层、房龄、装修、朝向等因素对价格进行微调。
+        计算特征调整系数（加减分项）。
+        --------------------------
+        基于房源的具体特征对基础价格进行微调：
+        - 地铁房：溢价 +6.5%
+        - 优质学区：溢价 +11.5%
+        - 楼层：高楼层通常更贵(+4%)，低楼层相对便宜(-4%)。
+        - 房龄：每年按 0.75% 的比例进行折旧，最高折损 30%。
+        - 装修：精装(+7.5%) vs 毛坯(-6.5%)。
+        - 朝向：南向阳光充足(+4%)，北向相对折价(-2.5%)。
         """
         factor = 1.0
         
-        # 地铁因素：+6.5%
         if self.params.get('has_subway'):
             factor *= 1.065
             
-        # 学区因素：+11.5%
         if self.params.get('is_school_district'):
             factor *= 1.115
             
-        # 楼层因素
         ft = self.params.get('floor_type')
         if ft == 'high':
-            factor *= 1.04 # 高楼层溢价
+            factor *= 1.04
         elif ft == 'low':
-            factor *= 0.96 # 低楼层折价
+            factor *= 0.96
             
-        # 房龄折旧
         age = self.params.get('building_age', 0)
         if age > 0:
-            # 每年折旧 0.75%，最高折旧 30%
             depreciation = min(age * 0.0075, 0.30)
             factor *= (1 - depreciation)
             
-        # 装修状况
         dec = self.params.get('decoration')
         if dec == 'exquisite':
-            factor *= 1.075 # 精装溢价
+            factor *= 1.075
         elif dec == 'rough':
-            factor *= 0.935 # 毛坯折价
+            factor *= 0.935
             
-        # 朝向因素
         ori = self.params.get('orientation')
         if ori == 'south':
-            factor *= 1.04 # 南向溢价
+            factor *= 1.04
         elif ori == 'north':
-            factor *= 0.975 # 北向折价
+            factor *= 0.975
             
         return factor
 
     def estimate(self):
         """
-        执行完整的估价流程。
-        1. 查找相似房源
-        2. 计算基础价格
-        3. 应用特征调整系数
-        4. 生成价格范围
-        5. 保存查询历史
+        执行完整的估价工作流。
+        -------------------
+        1. 检索相似房源并排序。
+        2. 如果有参考数据，执行加权平均计算基础价；若无数据，启动基准价兜底。
+        3. 根据目标房源的装修、楼层、地铁等特征，计算综合调整系数。
+        4. 得出最终预估总价，并推算出一个 ±5% 的合理价格区间。
+        5. 将此次估价请求和结果存入数据库历史记录，供日后分析。
         """
         self.find_similar_houses()
         
         base_price = Decimal(0)
         
         if not self.similar_houses:
-            # 降级策略：如果没有找到相似房源，使用该区域的平均单价
+            # 数据库无数据时的降级处理
             avg_data = House.objects.filter(region__icontains=self.params['region']).aggregate(Avg('unit_price'))
             avg_price = avg_data.get('unit_price__avg')
             if avg_price:
                 base_price = Decimal(avg_price) * Decimal(self.params['area'])
             else:
-                # 兜底默认值 (根据城市基准价)
                 benchmark = self.get_city_benchmark_price(self.params['region'])
                 base_price = benchmark * Decimal(self.params['area'])
         else:
@@ -293,14 +285,12 @@ class PriceEstimator:
         factor = self.get_adjustment_factor()
         final_price = base_price * Decimal(factor)
         
-        # 计算价格区间 (+/- 5%)
+        # 计算价格波动的合理区间
         price_low = final_price * Decimal(0.95)
         price_high = final_price * Decimal(1.05)
         
-        # 提取前5个最相似的房源用于展示
+        # 提取展示数据
         similar_houses_list = [h for h, s in self.similar_houses[:5]]
-        
-        # 获取搜索结果 (当前区域的最新房源)
         search_results = self.get_search_results()
         
         result = {
@@ -310,12 +300,12 @@ class PriceEstimator:
             "price_range_low": round(price_low, 2),
             "price_range_high": round(price_high, 2),
             "similar_houses": similar_houses_list,
-            "search_results": search_results,  # 添加搜索结果
+            "search_results": search_results,
             "market_trend": "稳中有升" if factor > 1.1 else "平稳",
             "factor": factor
         }
         
-        # 保存此次估价记录到数据库
+        # 记录到估价历史表
         EstimationHistory.objects.create(
             region=self.params['region'],
             area=self.params['area'],

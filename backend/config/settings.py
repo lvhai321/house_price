@@ -1,32 +1,30 @@
 """
-项目主配置文件
-包含数据库配置、已安装应用、中间件等核心设置
+项目全局配置文件
+----------------
+包含数据库连接、已安装应用列表、中间件、跨域设置以及日志记录等核心配置。
 """
 
 from pathlib import Path
 import os
 from dotenv import load_dotenv
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+# 项目根目录路径 (backend/ 目录)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env file
+# 加载 .env 环境变量文件，保护敏感信息（如数据库密码、密钥等）
 load_dotenv(BASE_DIR / '.env')
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
+# Django 安全密钥，生产环境必须在 .env 中设置
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-me-in-production')
 
-# SECURITY WARNING: don't run with debug turned on in production!
+# 调试模式开关：开发环境建议设为 True，生产环境务必设为 False
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
+# 允许访问的主机列表
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
 
-# Application definition
-
+# 已安装的 Django 应用
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -35,18 +33,19 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     
-    # Third party apps
-    'rest_framework',
-    'corsheaders',
+    # 第三方扩展包
+    'rest_framework', # REST API 支持
+    'corsheaders',    # 跨域资源共享支持
     
-    # Local apps
-    'apps.spider',
-    'apps.estimator',
-    'apps.api',
+    # 本地业务应用
+    'apps.spider',    # 爬虫模块
+    'apps.estimator', # 估价模块
+    'apps.api',       # API 接口模块
 ]
 
+# 中间件配置
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware', # CORS middleware should be as high as possible
+    'corsheaders.middleware.CorsMiddleware', # 跨域中间件，必须放在 CommonMiddleware 之前
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -58,6 +57,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'config.urls'
 
+# 模板引擎配置
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -77,12 +77,8 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
-
-# 通过环境变量 DB_ENGINE 控制使用的数据库引擎：
-# - sqlite: 使用本地 SQLite（开发/演示最简配置）
-# - mysql: 使用 MySQL（生产/联调）
+# 数据库配置
+# 默认使用 MySQL。可以通过 .env 文件配置连接详情。
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -95,60 +91,26 @@ DATABASES = {
 }
 
 
-# Password validation
-# https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
-
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
-]
-
-
-# Internationalization
-# https://docs.djangoproject.com/en/5.0/topics/i18n/
-
-LANGUAGE_CODE = 'zh-hans'
-
-TIME_ZONE = 'Asia/Shanghai'
-
+# 国际化配置
+LANGUAGE_CODE = 'zh-hans' # 使用简体中文界面
+TIME_ZONE = 'Asia/Shanghai' # 使用上海时区
 USE_I18N = True
-
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.0/howto/static-files/
-
+# 静态文件配置 (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
 STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS settings
-# 默认允许所有来源，可通过环境变量 CORS_ALLOW_ALL_ORIGINS=False 关闭
+# 跨域设置：开发环境下默认允许所有来源
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'True') == 'True'
 
-# 如果关闭了允许所有，则需要配置允许的列表
-if not CORS_ALLOW_ALL_ORIGINS:
-    CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
-
-# Logging Configuration
+# 日志记录配置：用于记录爬虫运行日志和 API 异常
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

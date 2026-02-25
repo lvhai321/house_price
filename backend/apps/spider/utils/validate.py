@@ -1,12 +1,21 @@
+"""
+数据合法性校验工具模块
+----------------------
+用于在数据入库前进行最后的质量把关。
+确保抓取到的房源数据完整且数值逻辑合理。
+"""
+
 def filter_valid(items):
     """
-    过滤无效的房源数据。
-    必须包含: url, title, total_price, area
+    【数据完整性过滤】
+    筛选出包含必要字段（URL, 标题, 价格, 面积）的房源项。
     """
     valid_items = []
     for item in items:
+        # 必须具备唯一标识和基本描述
         if not item.get("url") or not item.get("title"):
             continue
+        # 必须具备核心数值数据
         if not item.get("total_price") or not item.get("area"):
             continue
         valid_items.append(item)
@@ -14,8 +23,8 @@ def filter_valid(items):
 
 def dedup_by_url(items):
     """
-    根据 URL 去重。
-    保留第一个出现的项。
+    【内存去重】
+    根据 URL 对列表进行去重，确保返回给前端的数据不包含重复项。
     """
     seen_urls = set()
     unique_items = []
@@ -28,8 +37,8 @@ def dedup_by_url(items):
 
 def is_valid_area(area):
     """
-    验证面积是否合理。
-    例如: 5平米 < area < 10000平米
+    【面积逻辑校验】
+    判断面积数值是否在人类居住房屋的合理范围内（5㎡ ~ 10000㎡）。
     """
     if area is None:
         return False
@@ -41,8 +50,8 @@ def is_valid_area(area):
 
 def is_valid_price(total_price, unit_price):
     """
-    验证价格是否合理。
-    例如: 总价 > 0, 单价 > 0
+    【价格逻辑校验】
+    判断总价和单价是否为正数。
     """
     if total_price is None or unit_price is None:
         return False
