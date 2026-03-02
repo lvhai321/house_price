@@ -6,7 +6,7 @@
  */
 
 // 户型选项：涵盖了主流的住宅格局
-export const layoutOptions = [
+export const LAYOUTS = [
   { label: '1室1厅', value: '1室1厅' },
   { label: '2室1厅', value: '2室1厅' },
   { label: '2室2厅', value: '2室2厅' },
@@ -17,21 +17,21 @@ export const layoutOptions = [
 ]
 
 // 楼层位置：反映了房屋的采光和视野情况
-export const floorOptions = [
+export const FLOOR_TYPES = [
   { label: '低楼层', value: 'low' },
   { label: '中楼层', value: 'mid' },
   { label: '高楼层', value: 'high' },
 ]
 
 // 装修程度：对房屋估值有显著影响
-export const decorationOptions = [
+export const DECORATIONS = [
   { label: '毛坯', value: 'rough' },
   { label: '简装', value: 'simple' },
   { label: '精装', value: 'exquisite' },
 ]
 
 // 房屋朝向：中国北方及大部分地区偏好南向
-export const orientationOptions = [
+export const ORIENTATIONS = [
   { label: '朝南', value: 'south' },
   { label: '朝北', value: 'north' },
   { label: '朝东', value: 'east' },
@@ -39,7 +39,7 @@ export const orientationOptions = [
 ]
 
 // 附加特征：溢价较高的核心属性
-export const featureOptions = [
+export const FEATURE_OPTIONS = [
   { label: '近地铁', value: 'has_subway' },
   { label: '学区房', value: 'is_school_district' },
 ]

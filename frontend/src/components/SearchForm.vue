@@ -193,7 +193,7 @@
 import { ref, reactive, watch } from 'vue'
 import { House, Clock, RefreshRight, Position, School, Download, Location } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { REGIONS, LAYOUTS, FLOOR_TYPES, ORIENTATIONS, DECORATIONS } from '@/constants/options'
+import { LAYOUTS, FLOOR_TYPES, ORIENTATIONS, DECORATIONS } from '@/constants/options'
 import { startCrawl } from '@/api'
 
 // --- Props 定义 ---
