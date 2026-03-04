@@ -1,6 +1,9 @@
 import re
+import pandas as pd
+import numpy as np
 from decimal import Decimal
 from django.db.models import Avg
+from sklearn.ensemble import RandomForestRegressor
 from apps.spider.models import House
 from .models import EstimationHistory
 
@@ -8,10 +11,15 @@ class PriceEstimator:
     """
     房价估算核心服务类。
     ------------------
-    该类实现了“市场比较法”（Market Comparison Approach）的简化版逻辑。
-    通过在数据库中寻找相似房源，计算加权平均单价，并根据目标房源的各项特征（楼层、朝向、装修等）进行系数修正，
-    从而得出一个科学、合理的预估价格。
+    该类实现了“市场比较法”（Market Comparison Approach）的简化版逻辑，
+    并集成了“即时随机森林”（Just-in-Time Random Forest）算法作为高级预测引擎。
     """
+    
+    # 特征映射表：将分类字符串转为数值，便于机器学习模型处理
+    DECORATION_MAP = {'rough': 0, 'simple': 1, 'exquisite': 2}
+    FLOOR_MAP = {'low': 0, 'mid': 1, 'high': 2}
+    ORIENTATION_MAP = {'south': 3, 'east': 2, 'west': 1, 'north': 0} # 朝向权重：南 > 东 > 西 > 北
+
     def __init__(self, query_params):
         """
         初始化估价引擎。
@@ -255,35 +263,122 @@ class PriceEstimator:
             
         return factor
 
+    def _estimate_by_rf(self, similar_houses):
+        """
+        [高级算法] 即时随机森林预测。
+        --------------------------
+        1. 将相似房源数据转换为 DataFrame。
+        2. [新增] 使用 3-Sigma 原则剔除异常值，防止极端数据干扰。
+        3. 实时训练一个随机森林回归器（50棵树）。
+        4. [新增] 提取特征重要性，解释模型决策依据。
+        5. 预测目标房源的单位单价。
+        """
+        if len(similar_houses) < 10: # 如果样本太少，RF效果不佳
+            return None, {}
+            
+        # 1. 构造训练数据集
+        train_data = []
+        for h, score in similar_houses:
+            s, t = self.parse_layout(h.layout)
+            train_data.append({
+                'area': float(h.area),
+                'shi': s,
+                'ting': t,
+                'price': float(h.unit_price) # Label: 单位单价
+            })
+            
+        df = pd.DataFrame(train_data)
+        
+        # --- [新增] 异常值过滤 (3-Sigma) ---
+        # 目的：剔除价格过高或过低的“脏数据”，提高模型鲁棒性
+        if len(df) > 5:
+            mean_price = df['price'].mean()
+            std_price = df['price'].std()
+            if std_price > 0:
+                df_clean = df[
+                    (df['price'] >= mean_price - 2 * std_price) & 
+                    (df['price'] <= mean_price + 2 * std_price)
+                ]
+            else:
+                df_clean = df
+                
+            # 如果过滤后数据太少，回退使用原始数据
+            if len(df_clean) < 5:
+                df_clean = df
+        else:
+            df_clean = df
+
+        X = df_clean.drop('price', axis=1)
+        y = df_clean['price']
+        
+        # 2. 实时训练模型
+        model = RandomForestRegressor(n_estimators=50, random_state=42)
+        model.fit(X, y)
+        
+        # --- [新增] 提取特征重要性 ---
+        # 目的：让算法具有可解释性，知道是面积、室数还是厅数在影响价格
+        importances = model.feature_importances_
+        feature_names = ['area', 'shi', 'ting'] # 与 X 的列对应
+        feature_importance = {}
+        if len(importances) == len(feature_names):
+             feature_importance = dict(zip(feature_names, [round(float(x), 4) for x in importances]))
+
+        # 3. 构造预测特征
+        q_s, q_t = self.parse_layout(self.params.get('layout'))
+        predict_features = pd.DataFrame([{
+            'area': float(self.params['area']),
+            'shi': q_s,
+            'ting': q_t
+        }])
+        
+        # 4. 得到预测单价 (Base)
+        predicted_base_unit_price = model.predict(predict_features)[0]
+        
+        # 5. 同样应用调节系数（使 RF 预测值更具实际参考意义）
+        factor = self.get_adjustment_factor()
+        final_predicted_price = Decimal(predicted_base_unit_price) * Decimal(self.params['area']) * Decimal(factor)
+        
+        return final_predicted_price, feature_importance
+
     def estimate(self):
         """
         执行完整的估价工作流。
         -------------------
-        1. 检索相似房源并排序。
-        2. 如果有参考数据，执行加权平均计算基础价；若无数据，启动基准价兜底。
-        3. 根据目标房源的装修、楼层、地铁等特征，计算综合调整系数。
-        4. 得出最终预估总价，并推算出一个 ±5% 的合理价格区间。
-        5. 将此次估价请求和结果存入数据库历史记录，供日后分析。
+        1. 检索相似房源。
+        2. [算法 A] 执行传统启发式加权平均估价。
+        3. [算法 B] 如果样本充足，执行随机森林预测。
+        4. 综合两种算法得出最终结果。
         """
         self.find_similar_houses()
         
-        base_price = Decimal(0)
-        
+        # --- 算法 A: 启发式估价 ---
+        base_price_heuristic = Decimal(0)
         if not self.similar_houses:
-            # 数据库无数据时的降级处理
             avg_data = House.objects.filter(region__icontains=self.params['region']).aggregate(Avg('unit_price'))
             avg_price = avg_data.get('unit_price__avg')
             if avg_price:
-                base_price = Decimal(avg_price) * Decimal(self.params['area'])
+                base_price_heuristic = Decimal(avg_price) * Decimal(self.params['area'])
             else:
                 benchmark = self.get_city_benchmark_price(self.params['region'])
-                base_price = benchmark * Decimal(self.params['area'])
+                base_price_heuristic = benchmark * Decimal(self.params['area'])
         else:
-            base_price = self.calculate_base_price()
+            base_price_heuristic = self.calculate_base_price()
             
-        # 应用调整系数
         factor = self.get_adjustment_factor()
-        final_price = base_price * Decimal(factor)
+        final_price_heuristic = base_price_heuristic * Decimal(factor)
+        
+        # --- 算法 B: 随机森林估价 ---
+        # [修改] 接收特征重要性字典
+        final_price_rf, feature_importance = self._estimate_by_rf(self.similar_houses)
+        
+        # --- 决策融合 ---
+        # 如果 RF 预测成功，我们采用加权融合（RF 占 70%，启发式占 30%）
+        if final_price_rf:
+            final_price = (final_price_rf * Decimal(0.7)) + (final_price_heuristic * Decimal(0.3))
+            algorithm_used = "随机森林+启发式融合"
+        else:
+            final_price = final_price_heuristic
+            algorithm_used = "启发式加权平均"
         
         # 计算价格波动的合理区间
         price_low = final_price * Decimal(0.95)
@@ -295,14 +390,18 @@ class PriceEstimator:
         
         result = {
             "estimated_price": round(final_price, 2),
-            "base_price": round(base_price, 2),
+            "heuristic_price": round(final_price_heuristic, 2),
+            "rf_price": round(final_price_rf, 2) if final_price_rf else None,
+            "algorithm": algorithm_used,
             "unit_price": round(final_price / Decimal(self.params['area']), 2),
             "price_range_low": round(price_low, 2),
             "price_range_high": round(price_high, 2),
             "similar_houses": similar_houses_list,
             "search_results": search_results,
             "market_trend": "稳中有升" if factor > 1.1 else "平稳",
-            "factor": factor
+            "factor": factor,
+            # [新增] 返回特征重要性，便于前端展示或后台分析
+            "feature_importance": feature_importance
         }
         
         # 记录到估价历史表
@@ -316,10 +415,11 @@ class PriceEstimator:
             building_age=self.params.get('building_age', 0),
             decoration=self.params.get('decoration', 'simple'),
             orientation=self.params.get('orientation', 'south'),
-            base_price=result['base_price'],
+            base_price=base_price_heuristic, # 记录基础参考价
             estimated_price=result['estimated_price'],
             price_range_low=result['price_range_low'],
             price_range_high=result['price_range_high']
         )
         
         return result
+

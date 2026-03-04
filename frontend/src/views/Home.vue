@@ -214,9 +214,15 @@ const priceChartRef = ref(null) // 图表组件引用
 const showHistory = ref(false)  // 控制历史记录抽屉显示
 const activeTab = ref('search_results') // 当前激活的选项卡
 
-// 监听 activeTab 变化，当切换到 chart 时手动触发 resize
-watch(activeTab, (newVal) => {
+// 监听 activeTab 变化，当切换到 chart 时检查数据并手动触发 resize
+watch(activeTab, async (newVal) => {
   if (newVal === 'chart') {
+    // 1. 如果没有趋势数据，或者当前区域与图表区域不一致，则重新获取
+    if (!chartData.value || !chartData.value.months || chartData.value.months.length === 0) {
+       await fetchStats(currentRegion.value || 'beijing')
+    }
+    
+    // 2. 数据准备好后，刷新图表尺寸
     nextTick(() => {
       if (priceChartRef.value) {
         priceChartRef.value.resize()

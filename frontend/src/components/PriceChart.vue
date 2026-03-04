@@ -89,6 +89,14 @@ const initChart = () => {
 
   myChart = echarts.init(chartRef.value)
   updateChartOption(props.chartData)
+  
+  // 确保尺寸监听器已绑定
+  if (!resizeObserver) {
+    resizeObserver = new ResizeObserver(() => {
+      myChart && myChart.resize()
+    })
+    resizeObserver.observe(chartRef.value)
+  }
 }
 
 /**
@@ -238,7 +246,10 @@ watch(() => props.chartData, (newVal) => {
   if (myChart) {
     updateChartOption(newVal)
   } else if (hasData.value) {
-    initChart()
+    // 数据从无到有，DOM 更新需要时间，必须使用 nextTick
+    nextTick(() => {
+      initChart()
+    })
   }
 }, { deep: true })
 

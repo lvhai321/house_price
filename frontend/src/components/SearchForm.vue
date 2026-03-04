@@ -223,17 +223,21 @@ const handleCrawl = async () => {
   }
   
   crawling.value = true
+  // 爬虫期间禁用搜索按钮，防止并发冲突
+  emit('update:loading', true) 
+  
   try {
     const res = await startCrawl(crawlForm)
     if (res.data.status === 'success') {
        const msg = res.data.message || '数据更新完成'
-       ElMessage.success(msg)
+       ElMessage.success(`${msg}，请重新估价以查看最新结果`)
        
-       // 更新成功后，将爬取的区域回填到主搜索表单，并自动触发搜索，以便用户立即看到结果
+       // 更新成功后，仅回填区域，不再自动触发搜索
+       // 让用户决定何时发起查询，彻底避免数据库锁冲突
        if (crawlForm.region) {
-         queryForm.region = crawlForm.region
-         emit('search', { ...queryForm })
+         emit('update:modelValue', { ...props.modelValue, region: crawlForm.region })
        }
+       
     } else {
        ElMessage.warning(res.data.message || '更新未完成')
     }
@@ -241,6 +245,7 @@ const handleCrawl = async () => {
     ElMessage.error('更新失败: ' + (error.response?.data?.message || error.message))
   } finally {
     crawling.value = false
+    emit('update:loading', false) // 恢复搜索按钮
     showCrawlDialog.value = false
   }
 }
