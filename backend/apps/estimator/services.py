@@ -2,17 +2,17 @@ import re
 import pandas as pd
 import numpy as np
 from decimal import Decimal
-from django.db.models import Avg
+from django.db.models import Avg, F
+from django.db.models.functions import Abs
 from sklearn.ensemble import RandomForestRegressor
 from apps.spider.models import House
 from .models import EstimationHistory
 
 class PriceEstimator:
     """
-    房价估算核心服务类。
-    ------------------
-    该类实现了“市场比较法”（Market Comparison Approach）的简化版逻辑，
-    并集成了“即时随机森林”（Just-in-Time Random Forest）算法作为高级预测引擎。
+    房价估算核心服务
+    结合两条思路：基于相似房源的经验加权 + 随机森林机器学习。
+    小样本时依赖经验法，样本充足时引入随机森林并与经验法融合。
     """
     
     # 特征映射表：将分类字符串转为数值，便于机器学习模型处理
@@ -41,8 +41,7 @@ class PriceEstimator:
     
     def parse_layout(self, layout_str):
         """
-        解析户型字符串。
-        例如：将 '2室1厅' 转化为数字元组 (2, 1)，便于后续进行数学比较。
+        解析户型字符串（如“2室1厅”）为 (室数, 厅数) 元组，便于比较。
         """
         if not layout_str:
             return (0, 0)
@@ -54,13 +53,11 @@ class PriceEstimator:
 
     def calculate_similarity(self, house):
         """
-        计算目标房源与库中某条房源的“相似度得分”（满分 100 分）。
-        
-        评分维度及权重：
-        1. 区域匹配 (40%): 区域完全一致得 40 分，包含关系（如：武汉 vs 武汉-白沙洲）得 30 分。
-        2. 面积接近 (30%): 面积差异越小得分越高。10%以内得满分，超过30%则该项得 10 分。
-        3. 户型相似 (20%): 室数和厅数完全一致得满分，室数差 1 间则减分。
-        4. 其他基础分 (10%): 默认赋予 5 分作为基础权重。
+        计算相似度（满分 100）：
+        - 区域匹配 40 分（包含关系记 30 分）
+        - 面积接近 30 分（10%内满分，20%/30%递减）
+        - 户型相似 20 分（完全一致满分，室数差 1 间降分）
+        - 基础分 10 分（默认给 5 分）
         """
         score = 0
         
@@ -98,14 +95,11 @@ class PriceEstimator:
 
     def find_similar_houses(self):
         """
-        在数据库中检索相似的参考房源。
-        
-        采用三层“降级检索”策略，确保即便数据稀少也能找到参考：
-        - 第一层：精准匹配。同一区域且面积差异在 ±40% 以内的房源。
-        - 第二层：放宽面积。若第一层不满 5 条，将面积差异放宽至 ±60%。
-        - 第三层：仅匹配区域。若依然不足，则不再限制面积，只匹配该区域的所有房源。
-        
-        检索完成后，会根据 calculate_similarity 进行打分并由高到低排序。
+        搜索相似房源（带降级策略）：
+        - 第一层：同区域，面积在目标的 ±40%
+        - 第二层：若不足 5 条，放宽到 ±60%
+        - 第三层：若仍不足，仅按区域匹配
+        按相似度打分并排序返回。
         """
         area = self.params['area']
         
@@ -142,22 +136,44 @@ class PriceEstimator:
 
     def get_search_results(self):
         """
-        获取该区域最新的房源记录。
-        仅用于前端展示“该区域最新房源”，不直接参与估价计算。
+        获取该区域贴近面积的房源列表（仅用于展示，不参与估价计算）。
+        优先返回面积在目标的 ±20%（不足则放宽至 ±40%），
+        并按面积差绝对值升序、id 降序排序。
         """
-        return House.objects.filter(
-            region__icontains=self.params['region']
-        ).order_by('-id')[:5]
+        # 面积贴近策略：优先返回与用户输入面积更接近的房源
+        target_area = float(self.params['area'])
+        region_kw = self.params['region']
+        
+        # 1) 首选 ±20% 面积范围
+        qs = House.objects.filter(
+            region__icontains=region_kw,
+            area__gte=target_area * 0.8,
+            area__lte=target_area * 1.2
+        )
+        # 2) 若不足，放宽至 ±40%
+        if qs.count() < 5:
+            qs = House.objects.filter(
+                region__icontains=region_kw,
+                area__gte=target_area * 0.6,
+                area__lte=target_area * 1.4
+            )
+            # 3) 极端情况，仅按区域匹配
+            if qs.count() < 5:
+                qs = House.objects.filter(region__icontains=region_kw)
+        
+        # 最终按“面积差绝对值”升序、id降序排序，返回前5条
+        qs = qs.annotate(
+            area_diff=Abs(F('area') - target_area)
+        ).order_by('area_diff', '-id')[:5]
+        
+        return qs
 
     def calculate_base_price(self):
         """
-        计算基础预估价格。
-        ----------------
-        算法逻辑：
-        1. 排除单价过高（>20万）或过低（<2000元）的异常噪音数据。
-        2. 对筛选出的相似房源执行“加权平均”：
-           相似度得分越高的房源，对最终价格的影响力越大。
-        3. 加权平均单价 * 目标房源面积 = 基础总价。
+        计算基础价（不含系数）：
+        1) 过滤异常单价（<2000 或 >200000 元/㎡）
+        2) 用相似度作为权重做加权单价
+        3) 加权单价 × 面积 = 基础总价
         """
         if not self.similar_houses:
             return None
@@ -180,10 +196,8 @@ class PriceEstimator:
 
     def get_city_benchmark_price(self, region):
         """
-        【兜底机制】获取城市基准单价。
-        ---------------------------
-        如果数据库中没有任何相似房源可供参考，则根据预设的各城市/热门区域基准价进行估算。
-        这些数据反映了 2025/2026 年度的宏观市场水位。
+        兜底：返回城市/板块的预设基准单价（元/㎡）。
+        先精确匹配，再模糊匹配；都没有时用三线城市水平。
         """
         region_lower = region.lower()
         try:
@@ -220,15 +234,12 @@ class PriceEstimator:
 
     def get_adjustment_factor(self):
         """
-        计算特征调整系数（加减分项）。
-        --------------------------
-        基于房源的具体特征对基础价格进行微调：
-        - 地铁房：溢价 +6.5%
-        - 优质学区：溢价 +11.5%
-        - 楼层：高楼层通常更贵(+4%)，低楼层相对便宜(-4%)。
-        - 房龄：每年按 0.75% 的比例进行折旧，最高折损 30%。
-        - 装修：精装(+7.5%) vs 毛坯(-6.5%)。
-        - 朝向：南向阳光充足(+4%)，北向相对折价(-2.5%)。
+        计算价格修正系数：
+        - 地铁 +6.5%，学区 +11.5%
+        - 楼层：高 +4%，低 -4%
+        - 房龄：每年折旧 0.75%，最多 30%
+        - 装修：精装 +7.5%，毛坯 -6.5%
+        - 朝向：南 +4%，北 -2.5%
         """
         factor = 1.0
         
@@ -265,13 +276,12 @@ class PriceEstimator:
 
     def _estimate_by_rf(self, similar_houses):
         """
-        [高级算法] 即时随机森林预测。
-        --------------------------
-        1. 将相似房源数据转换为 DataFrame。
-        2. [新增] 使用 3-Sigma 原则剔除异常值，防止极端数据干扰。
-        3. 实时训练一个随机森林回归器（50棵树）。
-        4. [新增] 提取特征重要性，解释模型决策依据。
-        5. 预测目标房源的单位单价。
+        随机森林即时预测（样本 ≥10）：
+        1) 组装训练集（面积/室/厅 → 单价）
+        2) 用 3-Sigma 清理异常单价
+        3) 训练 50 棵树的回归模型
+        4) 提取特征重要性（可解释）
+        5) 预测单价并乘面积与修正系数
         """
         if len(similar_houses) < 10: # 如果样本太少，RF效果不佳
             return None, {}
@@ -342,12 +352,12 @@ class PriceEstimator:
 
     def estimate(self):
         """
-        执行完整的估价工作流。
-        -------------------
-        1. 检索相似房源。
-        2. [算法 A] 执行传统启发式加权平均估价。
-        3. [算法 B] 如果样本充足，执行随机森林预测。
-        4. 综合两种算法得出最终结果。
+        估价流程：
+        1) 找相似房源
+        2) 经验法估价并应用修正系数
+        3) 若样本充足，进行随机森林预测
+        4) 成功则 70% RF + 30% 经验法融合，否则仅用经验法
+        返回最终价、区间、相似房源与特征重要性。
         """
         self.find_similar_houses()
         
@@ -422,4 +432,3 @@ class PriceEstimator:
         )
         
         return result
-
