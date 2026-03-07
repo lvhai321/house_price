@@ -148,6 +148,11 @@
               <!-- 选项卡 3: 历史查询记录 -->
               <el-tab-pane label="历史记录" name="history">
                  <div class="history-list">
+                    <div class="history-header-bar" v-if="searchHistory.length > 0">
+                      <el-button type="danger" link size="small" @click="handleClearHistory">
+                        <el-icon><Delete /></el-icon> 清空历史
+                      </el-button>
+                    </div>
                     <el-scrollbar height="400px">
                       <div v-if="searchHistory.length > 0">
                          <div v-for="(item, index) in searchHistory" :key="index" class="house-item history-item" @click="applyHistory(item)">
@@ -160,6 +165,16 @@
                             <div class="house-price">
                               <span class="total">{{ item.price }}万</span>
                             </div>
+                            <el-button 
+                              class="delete-btn"
+                              type="danger" 
+                              circle 
+                              size="small" 
+                              plain
+                              @click.stop="handleDeleteHistory(index, $event)"
+                            >
+                              <el-icon><Delete /></el-icon>
+                            </el-button>
                          </div>
                       </div>
                       <el-empty v-else description="暂无历史记录" />
@@ -174,15 +189,32 @@
     </div>
 
     <!-- 侧边抽屉: 移动端或快速访问历史记录 -->
-    <el-drawer v-model="showHistory" title="查询历史" size="300px">
+    <el-drawer v-model="showHistory" title="查询历史" size="320px">
+       <div v-if="searchHistory.length > 0" class="drawer-header-actions">
+          <el-button type="danger" link @click="handleClearHistory">
+             <el-icon><Delete /></el-icon> 清空全部
+          </el-button>
+       </div>
        <el-timeline>
         <el-timeline-item v-for="(item, index) in searchHistory" :key="index" :timestamp="item.date" placement="top">
-          <el-card class="history-card-mini" shadow="hover" @click="applyHistory(item)">
-             <div class="history-header">
-               <span class="history-region">{{ item.region }}</span>
-               <span class="history-price">{{ item.price }}万</span>
-             </div>
-          </el-card>
+          <div class="history-card-wrapper">
+             <el-card class="history-card-mini" shadow="hover" @click="applyHistory(item)">
+                <div class="history-header">
+                  <span class="history-region">{{ item.region }}</span>
+                  <span class="history-price">{{ item.price }}万</span>
+                </div>
+             </el-card>
+             <el-button 
+                class="mini-delete-btn" 
+                type="danger" 
+                circle 
+                size="small" 
+                text
+                @click.stop="handleDeleteHistory(index, $event)"
+             >
+                <el-icon><Delete /></el-icon>
+             </el-button>
+          </div>
         </el-timeline-item>
       </el-timeline>
     </el-drawer>
@@ -193,8 +225,8 @@
 import { ref, onMounted, reactive, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useValuationStore } from '../stores/valuation'
-import { ElMessage } from 'element-plus'
-import { ArrowRight } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowRight, Delete } from '@element-plus/icons-vue'
 import PriceChart from '../components/PriceChart.vue'
 import SearchForm from '../components/SearchForm.vue'
 import ValuationResult from '../components/ValuationResult.vue'
@@ -206,7 +238,7 @@ import ValuationResult from '../components/ValuationResult.vue'
 const store = useValuationStore()
 // 使用 storeToRefs 保持响应性解构
 const { loading, result, chartData, history: searchHistory, factors, currentRegion } = storeToRefs(store)
-const { search, fetchStats, loadHistory, reset } = store
+const { search, fetchStats, loadHistory, reset, clearHistory, removeHistoryItem } = store
 
 // --- UI 状态 ---
 const searchFormRef = ref(null) // 表单组件引用
@@ -283,6 +315,48 @@ const applyHistory = (item) => {
     handleSearch(item)
   }
   showHistory.value = false
+}
+
+/**
+ * 删除单条历史记录
+ * @param {number} index - 记录索引
+ * @param {Event} e - 事件对象
+ */
+const handleDeleteHistory = (index, e) => {
+  e.stopPropagation() // 阻止冒泡，避免触发 applyHistory
+  ElMessageBox.confirm(
+    '确定要删除这条历史记录吗？',
+    '提示',
+    {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+      lockScroll: false
+    }
+  ).then(() => {
+    removeHistoryItem(index)
+    ElMessage.success('删除成功')
+  }).catch(() => {})
+}
+
+/**
+ * 清空所有历史记录
+ */
+const handleClearHistory = () => {
+  ElMessageBox.confirm(
+    '确定要清空所有历史记录吗？此操作不可恢复。',
+    '警告',
+    {
+      confirmButtonText: '清空',
+      cancelButtonText: '取消',
+      type: 'warning',
+      lockScroll: false
+    }
+  ).then(() => {
+    clearHistory()
+    ElMessage.success('历史记录已清空')
+    showHistory.value = false // 如果在抽屉中操作，清空后关闭
+  }).catch(() => {})
 }
 
 /**
@@ -468,24 +542,65 @@ onMounted(() => {
 }
 
 /* History List Styles */
-.history-item .house-title {
-  color: #475569;
-  font-family: monospace;
-  font-size: 14px;
+.history-item {
+  position: relative;
+  padding-right: 60px; /* 为删除按钮预留空间 */
 }
 
-.chart-container {
-  height: 400px;
-  padding: 24px;
+.history-item:hover {
+  background-color: #f1f5f9;
 }
 
-/* History Mini Card */
+.delete-btn {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.history-item:hover .delete-btn {
+  opacity: 1;
+}
+
+.history-header-bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.drawer-header-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+  padding-right: 12px;
+}
+
+.history-card-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .history-card-mini {
+    flex: 1;
     cursor: pointer;
     border-radius: 12px;
     border: 1px solid #f1f5f9;
     transition: all 0.2s;
 }
+
+.mini-delete-btn {
+  opacity: 0.6;
+}
+.mini-delete-btn:hover {
+  opacity: 1;
+  background-color: #fee2e2;
+}
+
 .history-card-mini:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.05);

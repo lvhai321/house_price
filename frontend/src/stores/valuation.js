@@ -148,6 +148,25 @@ export const useValuationStore = defineStore('valuation', {
     },
 
     /**
+     * 清空所有历史记录
+     */
+    clearHistory() {
+      this.history = []
+      localStorage.removeItem('house_price_history')
+    },
+
+    /**
+     * 删除指定索引的历史记录
+     * @param {number} index - 要删除的记录索引
+     */
+    removeHistoryItem(index) {
+      if (index >= 0 && index < this.history.length) {
+        this.history.splice(index, 1)
+        localStorage.setItem('house_price_history', JSON.stringify(this.history))
+      }
+    },
+
+    /**
      * 重置当前结果与因子
      */
     reset() {
