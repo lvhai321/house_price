@@ -41,24 +41,26 @@
     >
       <!-- 区域选择 -->
       <el-form-item label="区域" prop="region">
-        <el-input 
-          v-model="queryForm.region" 
-          placeholder="请输入区域名称 (如: 朝阳, 海淀)" 
-          style="width: 100%" 
+        <el-autocomplete
+          v-model="queryForm.region"
+          :fetch-suggestions="querySearchRegion"
+          placeholder="请输入区域名称 (如: 朝阳, 海淀)"
+          style="width: 100%"
           size="large"
           clearable
+          :trigger-on-focus="false"
         >
           <template #prefix>
             <el-icon><Location /></el-icon>
           </template>
-        </el-input>
+        </el-autocomplete>
       </el-form-item>
 
       <el-row :gutter="12">
         <el-col :span="12">
           <!-- 面积输入 -->
           <el-form-item label="面积 (㎡)" prop="area">
-            <el-input-number v-model="queryForm.area" :min="10" :max="1000" style="width: 100%" size="large" :controls="false" />
+            <el-input-number v-model="queryForm.area" :min="1" :max="10000" style="width: 100%" size="large" :controls="false" />
           </el-form-item>
         </el-col>
         <el-col :span="12">
@@ -122,7 +124,7 @@
         <el-col :span="12">
            <!-- 房龄输入 -->
            <el-form-item label="房龄 (年)" prop="building_age">
-            <el-input-number v-model="queryForm.building_age" :min="0" :max="100" style="width: 100%" size="large" :controls="false" />
+            <el-input-number v-model="queryForm.building_age" :min="-50" :max="100" style="width: 100%" size="large" :controls="false" />
           </el-form-item>
         </el-col>
       </el-row>
@@ -194,7 +196,7 @@ import { ref, reactive, watch } from 'vue'
 import { House, Clock, RefreshRight, Position, School, Download, Location } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { LAYOUTS, FLOOR_TYPES, ORIENTATIONS, DECORATIONS } from '@/constants/options'
-import { startCrawl } from '@/api'
+import { startCrawl, getRegionStats } from '@/api'
 
 // --- Props 定义 ---
 const props = defineProps({
@@ -291,9 +293,34 @@ const updateFeatures = (key, val) => {
   }
 }
 
+/**
+ * 区域输入联想
+ * @param {string} queryString - 用户输入的关键字
+ * @param {Function} cb - 回调函数
+ */
+const querySearchRegion = async (queryString, cb) => {
+  if (!queryString) {
+    cb([])
+    return
+  }
+  
+  // 模拟从历史记录或常用区域中获取建议（这里暂未调用后端联想接口，可后续扩展）
+  // 简单起见，这里仅展示输入值本身，提示用户“点击搜索”
+  // 但为了体验更好，如果用户输入了有效的行政区，可以提示
+  // 实际上，后端 estimate 接口现在会做强校验，所以前端主要起引导作用
+  // 此处留空或返回空数组，因为我们已经有后端强校验了
+  // 如果需要后端联想，需要新增一个 API 接口 /api/regions/suggest
+  
+  // 暂时返回空，仅利用 el-autocomplete 的样式
+  cb([])
+}
+
 // --- 表单验证规则 ---
 const rules = {
-  region: [{ required: true, message: '请输入区域名称', trigger: 'blur' }],
+  region: [
+    { required: true, message: '请输入区域名称', trigger: 'blur' },
+    { pattern: /^[\u4e00-\u9fa5]+$/, message: '区域必须为纯中文字符', trigger: 'blur' }
+  ],
   area: [{ required: true, message: '请输入面积', trigger: 'blur' }],
   layout: [{ required: true, message: '请选择户型', trigger: 'change' }],
   floor_type: [{ required: true, message: '请选择楼层', trigger: 'change' }],
@@ -348,8 +375,18 @@ const handleSearch = async () => {
  */
 const setFormValues = (values) => {
   Object.assign(queryForm, values)
-  featureFlags.has_subway = values.features.includes('has_subway')
-  featureFlags.is_school_district = values.features.includes('is_school_district')
+  if (values.features) {
+    featureFlags.has_subway = values.features.includes('has_subway')
+    featureFlags.is_school_district = values.features.includes('is_school_district')
+  }
+}
+
+/**
+ * 仅更新指定字段
+ * @param {Object} fields - 要更新的字段键值对
+ */
+const updateFields = (fields) => {
+  Object.assign(queryForm, fields)
 }
 
 // 导出常量供模板使用，避免在 setup 中重复定义
@@ -361,8 +398,10 @@ const decorations = DECORATIONS
 // 暴露方法供父组件通过 ref 调用
 defineExpose({
   setFormValues,
+  updateFields,
   showCrawlDialog,
-  crawlForm
+  crawlForm,
+  queryForm
 })
 </script>
 

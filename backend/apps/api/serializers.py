@@ -6,6 +6,7 @@ REST API 数据序列化模块
 同时也负责对前端提交的 POST 请求数据进行合法性校验。
 """
 from rest_framework import serializers
+import re
 from apps.spider.models import House
 from apps.estimator.models import EstimationHistory
 
@@ -37,7 +38,15 @@ class EstimateRequestSerializer(serializers.Serializer):
     包含了房源的各项物理特征，如面积、户型、楼层、朝向等。
     """
     region = serializers.CharField(max_length=100, help_text="房源所在区域")
-    area = serializers.FloatField(min_value=10, max_value=1000, help_text="房屋面积 (㎡)")
+    
+    def validate_region(self, value):
+        """校验区域名称是否为纯中文"""
+        if not re.match(r'^[\u4e00-\u9fa5]+$', value):
+            raise serializers.ValidationError("区域名称必须为纯中文字符")
+        return value
+
+    # 放宽校验范围，允许极值进入，交由 services 层做智能修正
+    area = serializers.FloatField(min_value=1, max_value=10000, help_text="房屋面积 (㎡)")
     layout = serializers.CharField(max_length=50, help_text="户型描述 (如：3室2厅)")
     has_subway = serializers.BooleanField(required=False, default=False, help_text="是否近地铁")
     is_school_district = serializers.BooleanField(required=False, default=False, help_text="是否为学区房")
@@ -47,7 +56,8 @@ class EstimateRequestSerializer(serializers.Serializer):
         choices=[('low', '低楼层'), ('mid', '中楼层'), ('high', '高楼层')], 
         default='mid'
     )
-    building_age = serializers.IntegerField(min_value=0, max_value=100, default=0, help_text="房龄")
+    # 房龄允许负值，便于后续逻辑修正
+    building_age = serializers.IntegerField(min_value=-50, max_value=100, default=0, help_text="房龄")
     decoration = serializers.ChoiceField(
         choices=[('rough', '毛坯'), ('simple', '简装'), ('exquisite', '精装')], 
         default='simple'

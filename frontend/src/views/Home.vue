@@ -295,7 +295,22 @@ const handleReset = () => {
 const handleSearch = async (queryForm) => {
   try {
     await search(queryForm)
-    ElMessage.success('估价完成')
+    
+    // 检查是否有参数修正
+    if (result.value && result.value.correction) {
+      const { message, corrected } = result.value.correction
+      ElMessage.warning({
+        message: message,
+        duration: 5000,
+        showClose: true
+      })
+      // 回填修正后的参数到表单
+      if (searchFormRef.value && corrected) {
+        searchFormRef.value.updateFields(corrected)
+      }
+    } else {
+      ElMessage.success('估价完成')
+    }
   } catch (error) {
     ElMessage.error('查询失败，请稍后重试')
   }
