@@ -429,32 +429,52 @@ class PriceEstimator:
         # --- 0. 智能参数校验与修正 ---
         self.validate_and_correct_params()
         
+        # 1. 查找相似房源 (依赖修正后的参数)
         self.find_similar_houses()
         
         # --- 算法 A: 启发式估价 ---
         base_price_heuristic = Decimal(0)
+        
+        # 确保在没有相似房源时也能给出一个兜底价格
+        # 如果 find_similar_houses 没找到房源，尝试按区域均价或基准价估算
         if not self.similar_houses:
+            # 尝试获取区域均价
             avg_data = House.objects.filter(region__icontains=self.params['region']).aggregate(Avg('unit_price'))
             avg_price = avg_data.get('unit_price__avg')
+            
             if avg_price:
                 base_price_heuristic = Decimal(avg_price) * Decimal(self.params['area'])
             else:
+                # 最后的兜底：使用城市基准价
                 benchmark = self.get_city_benchmark_price(self.params['region'])
                 base_price_heuristic = benchmark * Decimal(self.params['area'])
         else:
-            base_price_heuristic = self.calculate_base_price()
+            # 正常流程：基于相似房源计算
+            calc_res = self.calculate_base_price()
+            if calc_res:
+                base_price_heuristic = calc_res
+            else:
+                # 极端情况：有相似房源但全被 calculate_base_price 过滤掉了
+                 base_price_heuristic = Decimal(10000) * Decimal(self.params['area'])
             
         factor = self.get_adjustment_factor()
         final_price_heuristic = base_price_heuristic * Decimal(factor)
         
         # --- 算法 B: 随机森林估价 ---
-        # [修改] 接收特征重要性字典
-        final_price_rf, feature_importance = self._estimate_by_rf(self.similar_houses)
+        final_price_rf = None
+        feature_importance = {}
         
+        # 只有在有足够相似房源时才尝试 RF
+        if self.similar_houses and len(self.similar_houses) >= 5:
+             try:
+                final_price_rf, feature_importance = self._estimate_by_rf(self.similar_houses)
+             except Exception:
+                final_price_rf = None
+
         # --- 决策融合 ---
         # 如果 RF 预测成功，我们采用加权融合（RF 占 70%，启发式占 30%）
         if final_price_rf:
-            final_price = (final_price_rf * Decimal(0.7)) + (final_price_heuristic * Decimal(0.3))
+            final_price = (Decimal(final_price_rf) * Decimal(0.7)) + (final_price_heuristic * Decimal(0.3))
             algorithm_used = "随机森林+启发式融合"
         else:
             final_price = final_price_heuristic

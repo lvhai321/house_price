@@ -301,9 +301,8 @@ onUnmounted(() => {
 <style scoped>
 .chart-wrapper {
   width: 100%;
-  height: 100%;
+  height: 400px; /* 显式设置高度，防止高度塌陷 */
   position: relative;
-  min-height: 320px;
 }
 
 .chart-container {
@@ -317,6 +316,8 @@ onUnmounted(() => {
   align-items: center;
   height: 100%;
   width: 100%;
+  background-color: #f8fafc; /* 增加轻微背景色区分 */
+  border-radius: 8px;
 }
 
 .empty-text {

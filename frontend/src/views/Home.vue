@@ -312,6 +312,24 @@ const handleSearch = async (queryForm) => {
       ElMessage.success('估价完成')
     }
   } catch (error) {
+    console.error('搜索请求异常:', error)
+    if (error.response && error.response.data) {
+      // 尝试提取后端返回的具体错误信息
+      const errorData = error.response.data
+      let errorMsg = ''
+      
+      if (typeof errorData === 'string') {
+        errorMsg = errorData
+      } else if (typeof errorData === 'object') {
+        // 拼接所有字段的错误信息
+        errorMsg = Object.values(errorData).flat().join('；')
+      }
+      
+      if (errorMsg) {
+        ElMessage.error(errorMsg)
+        return
+      }
+    }
     ElMessage.error('查询失败，请稍后重试')
   }
 }
